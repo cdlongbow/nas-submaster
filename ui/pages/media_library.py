@@ -296,16 +296,13 @@ def _filter_files_by_subtitle_status(files, filter_type: str):
     Args:
         files: 文件列表
         filter_type: 筛选类型
-            - "has_subtitle": 有字幕（但不是目标语言）
+            - "has_subtitle": 有字幕可翻译（有待处理的外挂字幕）
             - "no_subtitle": 无字幕
-            - "has_target_subtitle": 已有目标语言字幕
+            - "has_target_subtitle": 已有翻译字幕
 
     Returns:
         筛选后的文件列表
     """
-    # 目标语言字幕的语言代码
-    target_langs = {'zh', 'chs', 'cht'}
-
     result = []
     for f in files:
         if filter_type == "no_subtitle":
@@ -313,23 +310,21 @@ def _filter_files_by_subtitle_status(files, filter_type: str):
             if not f.subtitles:
                 result.append(f)
         elif filter_type == "has_subtitle":
-            # 有字幕，但不是目标语言字幕（可翻译）
+            # 有待处理的外挂字幕（asr 或 embedded，不包含 translated）
             if f.subtitles:
-                # 检查是否有非目标语言的字幕
-                has_translatable = False
+                has_external = False
                 for sub in f.subtitles:
-                    lang = sub.lang.lower()
-                    if lang not in target_langs and lang not in ['unknown', '']:
-                        has_translatable = True
+                    # asr 或 embedded 都是外挂字幕，可以处理
+                    if sub.source in ['asr', 'embedded']:
+                        has_external = True
                         break
-                if has_translatable:
+                if has_external:
                     result.append(f)
         elif filter_type == "has_target_subtitle":
-            # 已有目标语言字幕（可跳过）
+            # 已有翻译字幕（source='translated'）
             if f.subtitles:
                 for sub in f.subtitles:
-                    lang = sub.lang.lower()
-                    if lang in target_langs:
+                    if sub.source == 'translated':
                         result.append(f)
                         break
 
@@ -364,31 +359,53 @@ def _perform_scan(subdirectories: list, debug_mode: bool):
 
 def _render_media_card(media_file):
     """渲染单个媒体文件卡片"""
-    # 目标语言字幕的语言代码
-    target_langs = {'zh', 'chs', 'cht'}
+    # 语言名称映射
+    lang_names = {
+        'zh': '中文', 'chs': '中文', 'cht': '中文',
+        'en': '英文', 'eng': '英文',
+        'ja': '日文', 'jpn': '日文',
+        'ko': '韩文', 'kor': '韩文',
+        'fr': '法文', 'de': '德文', 'ru': '俄文', 'es': '西班牙文'
+    }
+
+    def get_lang_name(code):
+        return lang_names.get(code.lower(), code.upper())
 
     if not media_file.subtitles:
         badges = "<span class='status-chip chip-red'>无字幕</span>"
     else:
-        badges = ""
-        has_target_lang = False
-        has_other_lang = False
+        # 按来源分组字幕
+        embedded_langs = []
+        asr_langs = []
+        translated_langs = []
 
         for sub in media_file.subtitles:
             lang = sub.lang.lower()
-            if lang in target_langs:
-                has_target_lang = True
-            elif lang not in ['unknown', '']:
-                has_other_lang = True
+            if lang in ['unknown', '']:
+                continue
+            lang_display = get_lang_name(lang)
 
-        # 显示状态
-        if has_target_lang:
-            badges += "<span class='status-chip chip-green'>✓ 已有目标字幕</span>"
-        if has_other_lang:
-            badges += "<span class='status-chip chip-blue'>○ 有字幕可翻译</span>"
-        if not has_target_lang and not has_other_lang:
-            # 只有未知语言的字幕
-            badges += "<span class='status-chip chip-gray'>○ 有字幕</span>"
+            if sub.source == 'embedded':
+                if lang_display not in embedded_langs:
+                    embedded_langs.append(lang_display)
+            elif sub.source == 'asr':
+                if lang_display not in asr_langs:
+                    asr_langs.append(lang_display)
+            elif sub.source == 'translated':
+                if lang_display not in translated_langs:
+                    translated_langs.append(lang_display)
+
+        # 构建显示标签
+        badges = ""
+        if embedded_langs:
+            badges += f"<span class='status-chip chip-gray'>内置：{'、'.join(embedded_langs)}</span> "
+        if asr_langs:
+            badges += f"<span class='status-chip chip-blue'>AI提取：{'、'.join(asr_langs)}</span> "
+        if translated_langs:
+            badges += f"<span class='status-chip chip-green'>已翻译：{'、'.join(translated_langs)}</span>"
+
+        if not badges:
+            badges = "<span class='status-chip chip-gray'>有字幕</span>"
 
     file_name = html.escape(media_file.file_name)
     file_path = html.escape(media_file.file_path)

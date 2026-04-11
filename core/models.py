@@ -38,27 +38,61 @@ class ContentType(Enum):
 # 字幕相关模型
 # ============================================================================
 
+# 字幕来源枚举
+class SubtitleSource(Enum):
+    """字幕来源"""
+    EMBEDDED = 'embedded'    # 视频内置字幕
+    ASR = 'asr'            # Whisper语音识别
+    TRANSLATED = 'translated'  # 翻译生成
+
+
+# 字幕来源显示标签
+SUBTITLE_SOURCE_LABELS = {
+    'embedded': '内置',
+    'asr': 'AI提取',
+    'translated': '已翻译'
+}
+
+
 @dataclass
 class SubtitleInfo:
     """字幕文件信息"""
     path: str
-    lang: str
-    tag: str
-    
+    lang: str           # 语言代码
+    source: str = 'embedded'  # 来源：embedded/asr/translated
+
     def to_dict(self) -> Dict:
         return {
             'path': self.path,
             'lang': self.lang,
-            'tag': self.tag
+            'source': self.source
         }
-    
+
     @classmethod
     def from_dict(cls, data: Dict) -> 'SubtitleInfo':
         return cls(
             path=data['path'],
-            lang=data['lang'],
-            tag=data['tag']
+            lang=data.get('lang', data.get('tag', '')),
+            source=data.get('source', 'embedded')
         )
+
+    @property
+    def source_label(self) -> str:
+        """获取来源显示标签"""
+        return SUBTITLE_SOURCE_LABELS.get(self.source, '内置')
+
+    @property
+    def display_name(self) -> str:
+        """获取显示名称，如"内置：中文" """
+        lang_names = {
+            'zh': '中文', 'chs': '中文', 'cht': '中文',
+            'en': '英文', 'eng': '英文',
+            'ja': '日文', 'jpn': '日文',
+            'ko': '韩文', 'kor': '韩文',
+            'fr': '法文', 'de': '德文', 'ru': '俄文', 'es': '西班牙文'
+        }
+        lang_name = lang_names.get(self.lang.lower(), self.lang.upper())
+        return f"{self.source_label}：{lang_name}"
 
 
 @dataclass

@@ -277,6 +277,16 @@ class TaskWorker:
             )
 
             if srt_path and Path(srt_path).exists():
+                # 立即更新数据库：标记为内置字幕
+                from database.media_dao import MediaDAO
+                from core.models import SubtitleInfo
+                embedded_subtitle = SubtitleInfo(
+                    path=srt_path,
+                    lang=best_track.language or 'unknown',
+                    source='embedded'
+                )
+                # 更新该视频的字幕信息
+                MediaDAO.update_media_subtitles(file_path, [embedded_subtitle], False)
                 TaskDAO.update_task(task_id, progress=50, log="内置字幕提取成功", append_log=True)
                 return srt_path
             else:

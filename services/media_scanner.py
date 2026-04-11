@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 from typing import List, Tuple, Optional
 
-from core.models import SubtitleInfo, SUPPORTED_VIDEO_EXTENSIONS, SUPPORTED_SUBTITLE_FORMATS
+from core.models import SubtitleInfo, SUPPORTED_VIDEO_EXTENSIONS, SUPPORTED_SUBTITLE_FORMATS, SUBTITLE_SOURCE_LABELS
 from database.media_dao import MediaDAO
 from utils.lang_detection import detect_language_combined
 
@@ -163,64 +163,68 @@ class MediaScanner:
     def _scan_subtitles_for_video(self, video_path: Path) -> List[SubtitleInfo]:
         """
         扫描视频文件对应的字幕
-        
+
         Args:
             video_path: 视频文件路径
-        
+
         Returns:
             字幕信息列表
         """
         subtitles = []
         base_name = video_path.stem
         parent_dir = video_path.parent
-        
+
+        # 翻译字幕的语言代码后缀
+        target_lang_codes = {'.zh.', '.cht.', '.chs.', '.en.', '.ja.', '.ko.', '.fr.', '.de.', '.ru.', '.es.'}
+
         try:
             # 查找同名的 SRT 文件
             all_files = list(parent_dir.iterdir())
-            
+
             potential_subs = [
                 p for p in all_files
                 if p.is_file()
                 and p.suffix.lower().lstrip('.') in SUPPORTED_SUBTITLE_FORMATS
                 and p.name.lower().startswith(base_name.lower())
             ]
-            
+
             for sub_path in potential_subs:
-                sub_name = sub_path.name
-                
+                sub_name = sub_path.name.lower()
+
                 # 检测语言
                 lang_code, tag = detect_language_combined(
                     str(sub_path),
                     sub_name
                 )
-                
-                # 检查是否为默认字幕
-                if sub_path.stem.lower() == base_name.lower():
-                    tag += " (默认)"
-                
+
+                # 判断来源：翻译字幕 vs 识别字幕
+                # 如果文件名包含目标语言代码后缀（如 .zh., .en.），认为是翻译字幕
+                is_translated = any(code in sub_name for code in target_lang_codes)
+                source = 'translated' if is_translated else 'asr'
+
                 subtitles.append(SubtitleInfo(
                     path=str(sub_path),
                     lang=lang_code,
-                    tag=tag
+                    source=source
                 ))
-        
+
         except Exception as e:
             print(f"[MediaScanner] Failed to scan subtitles for {video_path}: {e}")
-        
+
         return subtitles
-    
+
     def _check_has_translation(self, subtitles: List[SubtitleInfo]) -> bool:
         """
-        检查是否有中文翻译字幕
-        
+        检查是否有翻译字幕（source='translated'）
+
         Args:
             subtitles: 字幕列表
-        
+
         Returns:
             是否有翻译
         """
         for sub in subtitles:
-            if sub.lang.lower() in ['zh', 'chs', 'cht']:
+            if sub.source == 'translated':
                 return True
         return False
     
