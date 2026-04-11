@@ -127,6 +127,10 @@ class SubtitleExtractor:
                 )
                 tracks.append(track)
 
+            # 调试日志：打印检测到的字幕轨道
+            print(f"[SubtitleExtractor] 检测到 {len(tracks)} 个字幕轨道: "
+                  f"{[(t.language, t.codec_name, t.title) for t in tracks]}")
+
         except subprocess.TimeoutExpired:
             print(f"[SubtitleExtractor] ffprobe timeout for {video_path}")
         except json.JSONDecodeError:
