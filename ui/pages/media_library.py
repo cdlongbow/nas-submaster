@@ -363,13 +363,23 @@ def _perform_scan(subdirectories: list, debug_mode: bool):
 
 def _render_media_card(media_file):
     """渲染单个媒体文件卡片"""
-    # 语言名称映射
+    # 语言名称映射（支持 ISO 639-1 和 ISO 639-2 格式）
     lang_names = {
+        # ISO 639-1
         'zh': '中文', 'chs': '中文', 'cht': '中文',
         'en': '英文', 'eng': '英文',
         'ja': '日文', 'jpn': '日文',
         'ko': '韩文', 'kor': '韩文',
-        'fr': '法文', 'de': '德文', 'ru': '俄文', 'es': '西班牙文'
+        'fr': '法文', 'de': '德文', 'ru': '俄文', 'es': '西班牙文',
+        # ISO 639-2（ffprobe 可能返回的格式）
+        'chi': '中文', 'zho': '中文',  # 中文
+        'eng': '英文',                  # 英文（已在上面，但重复也无害）
+        'jpn': '日文',                  # 日文（已在上面）
+        'kor': '韩文',                  # 韩文（已在上面）
+        'fre': '法文', 'fra': '法文',   # 法文
+        'ger': '德文', 'deu': '德文',   # 德文
+        'rus': '俄文',                  # 俄文
+        'spa': '西班牙文',              # 西班牙文
     }
 
     def get_lang_name(code):

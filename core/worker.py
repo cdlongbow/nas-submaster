@@ -117,6 +117,32 @@ class TaskWorker:
 
         return self._whisper_service
 
+    def _check_translation_config(self, config: AppConfig) -> tuple[bool, str]:
+        """
+        检查翻译配置是否完整
+
+        Returns:
+            (是否通过, 错误消息)
+        """
+        provider_cfg = config.get_current_provider_config()
+
+        # Ollama 本地模型：只需检查 base_url 和 model_name
+        if config.current_provider == "Ollama (本地模型)":
+            if not provider_cfg.base_url or not provider_cfg.base_url.strip():
+                return False, "Ollama 未配置 Base URL，请在设置中配置"
+            if not provider_cfg.model_name or not provider_cfg.model_name.strip():
+                return False, "Ollama 未选择模型，请在设置中配置"
+        else:
+            # 其他在线 API：检查 api_key, base_url, model_name
+            if not provider_cfg.api_key or not provider_cfg.api_key.strip():
+                return False, f"{config.current_provider} 未配置 API Key，请在设置中配置"
+            if not provider_cfg.base_url or not provider_cfg.base_url.strip():
+                return False, f"{config.current_provider} 未配置 Base URL，请在设置中配置"
+            if not provider_cfg.model_name or not provider_cfg.model_name.strip():
+                return False, f"{config.current_provider} 未选择模型，请在设置中配置"
+
+        return True, ""
+
     def _process_task(self, task_id: int, file_path: str, config: AppConfig):
         """
         处理单个任务
@@ -153,6 +179,18 @@ class TaskWorker:
             if self._check_cancelled(task_id):
                 TaskDAO.update_task(task_id, status=TaskStatus.CANCELLED, log="已取消", append_log=True)
                 return
+
+            # 步骤 1.5: 检查翻译配置（如果启用）
+            if config.translation.enabled:
+                config_ok, config_msg = self._check_translation_config(config)
+                if not config_ok:
+                    TaskDAO.update_task(
+                        task_id,
+                        status=TaskStatus.FAILED,
+                        log=f"配置错误: {config_msg}",
+                        append_log=True
+                    )
+                    return
 
             # 步骤 2: 翻译字幕（如果启用）
             if config.translation.enabled:

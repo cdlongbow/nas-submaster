@@ -16,6 +16,38 @@ from core.models import SubtitleTrack
 class SubtitleExtractor:
     """内置字幕提取器"""
 
+    # ffprobe 返回的语言代码到标准语言代码的映射
+    LANG_CODE_MAP = {
+        # ISO 639-1
+        'zh': 'zh', 'en': 'en', 'ja': 'ja', 'ko': 'ko',
+        'fr': 'fr', 'de': 'de', 'ru': 'ru', 'es': 'es',
+        # ISO 639-2（ffprobe 常用）
+        'chi': 'zh', 'zho': 'zh',  # 中文
+        'eng': 'en',                 # 英文
+        'jpn': 'ja',                 # 日文
+        'kor': 'ko',                 # 韩文
+        'fre': 'fr', 'fra': 'fr',   # 法文
+        'ger': 'de', 'deu': 'de',   # 德文
+        'rus': 'ru',                  # 俄文
+        'spa': 'es',                  # 西班牙文
+        # 全称（某些容器可能返回）
+        'chinese': 'zh', 'english': 'en', 'japanese': 'ja',
+        'korean': 'ko', 'french': 'fr', 'german': 'de',
+        'russian': 'ru', 'spanish': 'es',
+        # 其他
+        'und': 'unknown', 'unknown': 'unknown',
+    }
+
+    @staticmethod
+    def normalize_language_code(lang: str) -> str:
+        """将 ffprobe 返回的语言代码标准化为统一格式"""
+        if not lang:
+            return 'unknown'
+        return SubtitleExtractor.LANG_CODE_MAP.get(
+            lang.lower(),
+            lang.lower() if lang.isascii() else 'unknown'
+        )
+
     @staticmethod
     def detect_subtitle_tracks(video_path: str) -> List[SubtitleTrack]:
         """
@@ -74,6 +106,9 @@ class SubtitleExtractor:
 
                 if not language:
                     language = 'unknown'
+
+                # 标准化语言代码
+                language = SubtitleExtractor.normalize_language_code(language)
 
                 # 获取轨道标题
                 tags = stream.get('tags', {})
