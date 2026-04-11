@@ -367,12 +367,12 @@ def render_settings_dialog():
     # 5. 翻译设置
     with tab_trans:
         st.subheader("翻译流程控制")
-        
+
         enable_trans = st.toggle("启用翻译功能", value=config.translation.enabled)
         trans_changes['enable_translation'] = enable_trans
-        
+
         st.markdown("<br>", unsafe_allow_html=True)
-        
+
         target_lang = st.selectbox(
             "目标语言",
             TARGET_LANG_OPTIONS,
@@ -380,7 +380,18 @@ def render_settings_dialog():
             index=TARGET_LANG_OPTIONS.index(config.translation.target_language)
         )
         trans_changes['target_language'] = target_lang
-        
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        use_embedded = st.toggle(
+            "优先使用内置字幕（如果有）",
+            value=config.translation.use_embedded_subtitle,
+            help="开启后，系统会优先使用视频内置字幕进行翻译，速度更快"
+        )
+        trans_changes['use_embedded_subtitle'] = use_embedded
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
         batch_size = st.number_input(
             "批处理行数 (长视频分批翻译)",
             min_value=50, max_value=5000, step=50,
@@ -463,6 +474,7 @@ def _save_full_config(mgr, w_changes, m_changes, t_changes, e_changes, p_changes
     # Translation
     config.translation.enabled = t_changes['enable_translation']
     config.translation.target_language = t_changes['target_language']
+    config.translation.use_embedded_subtitle = t_changes.get('use_embedded_subtitle', True)
     config.translation.max_lines_per_batch = t_changes['max_lines_per_batch']
 
     # Export

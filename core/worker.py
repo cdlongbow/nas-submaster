@@ -145,8 +145,8 @@ class TaskWorker:
                 )
                 return
 
-            # 步骤 1: Whisper 提取字幕
-            srt_path = self._extract_subtitle(task_id, file_path, config)
+            # 步骤 1: 提取字幕（优先内置字幕，否则 Whisper）
+            srt_path = self._extract_or_detect_subtitle(task_id, file_path, config)
             if not srt_path:
                 return  # 提取失败或已取消，状态已在内部设置
 
@@ -197,6 +197,96 @@ class TaskWorker:
                 log=f"异常: {str(e)[:100]}",
                 append_log=True
             )
+
+    def _extract_or_detect_subtitle(
+        self,
+        task_id: int,
+        file_path: str,
+        config: AppConfig
+    ) -> Optional[str]:
+        """
+        提取字幕：优先使用内置字幕，否则使用 Whisper 识别
+
+        步骤：
+        1. 如果已有 SRT 字幕，直接使用
+        2. 如果开启"优先使用内置字幕"，检测并尝试提取内置字幕
+        3. 以上都失败则回退到 Whisper 识别
+
+        Returns:
+            SRT 文件路径，失败则返回 None
+        """
+        srt_path = Path(file_path).with_suffix('.srt')
+
+        # 如果字幕已存在，跳过提取
+        if srt_path.exists():
+            TaskDAO.update_task(task_id, progress=50, log="字幕已存在", append_log=True)
+            return str(srt_path)
+
+        # 如果开启"优先使用内置字幕"，尝试检测
+        if config.translation.use_embedded_subtitle:
+            embedded_srt = self._try_extract_embedded_subtitle(task_id, file_path, config)
+            if embedded_srt:
+                return embedded_srt
+
+        # 回退到 Whisper 识别
+        return self._extract_subtitle(task_id, file_path, config)
+
+    def _try_extract_embedded_subtitle(
+        self,
+        task_id: int,
+        file_path: str,
+        config: AppConfig
+    ) -> Optional[str]:
+        """
+        尝试提取内置字幕
+
+        Returns:
+            提取成功返回 SRT 路径，失败返回 None
+        """
+        try:
+            from services.subtitle_extractor import SubtitleExtractor
+
+            TaskDAO.update_task(task_id, progress=5, log="检测内置字幕...", append_log=True)
+
+            # 检测字幕轨道
+            tracks = SubtitleExtractor.detect_subtitle_tracks(file_path)
+            if not tracks:
+                TaskDAO.update_task(task_id, log="未检测到内置字幕，回退到 Whisper", append_log=True)
+                return None
+
+            # 选择最佳字幕轨道（非目标语言）
+            target_lang = config.translation.target_language
+            best_track = SubtitleExtractor.select_best_subtitle_track(tracks, target_lang)
+
+            if not best_track:
+                TaskDAO.update_task(task_id, log="无合适的字幕轨道，回退到 Whisper", append_log=True)
+                return None
+
+            TaskDAO.update_task(
+                task_id,
+                progress=10,
+                log=f"提取内置字幕: {best_track.display_name}",
+                append_log=True
+            )
+
+            # 提取字幕
+            srt_path = SubtitleExtractor.extract_subtitle(
+                file_path,
+                best_track.stream_index,
+                output_format='srt'
+            )
+
+            if srt_path and Path(srt_path).exists():
+                TaskDAO.update_task(task_id, progress=50, log="内置字幕提取成功", append_log=True)
+                return srt_path
+            else:
+                TaskDAO.update_task(task_id, log="内置字幕提取失败，回退到 Whisper", append_log=True)
+                return None
+
+        except Exception as e:
+            print(f"[TaskWorker] Failed to extract embedded subtitle: {e}")
+            TaskDAO.update_task(task_id, log="内置字幕提取失败，回退到 Whisper", append_log=True)
+            return None
 
     def _extract_subtitle(
         self,

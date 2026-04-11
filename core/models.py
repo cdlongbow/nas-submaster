@@ -150,14 +150,16 @@ class TranslationConfig:
     """翻译配置"""
     enabled: bool = False
     target_language: str = 'zh'
+    use_embedded_subtitle: bool = True  # 优先使用内置字幕（如果有）
     max_lines_per_batch: int = 500
     max_retries: int = 3
     timeout: int = 180
-    
+
     def to_dict(self) -> Dict:
         return {
             'enabled': self.enabled,
             'target_language': self.target_language,
+            'use_embedded_subtitle': self.use_embedded_subtitle,
             'max_lines_per_batch': self.max_lines_per_batch,
             'max_retries': self.max_retries,
             'timeout': self.timeout
@@ -198,6 +200,53 @@ class PromptTemplate:
             rules=data.get('rules', ''),
             style_guide=data.get('style_guide', '')
         )
+
+
+@dataclass
+class SubtitleTrack:
+    """字幕轨道信息"""
+    stream_index: int = 0     # 流索引（ffmpeg 用）
+    codec_name: str = ''      # 编码格式 (srt, ass, ssa, etc.)
+    language: str = ''         # 语言代码 (en, zh, etc.)
+    title: str = ''           # 轨道标题
+    is_soft_subtitle: bool = True  # 是否软字幕（可提取）
+
+    def to_dict(self) -> Dict:
+        return {
+            'stream_index': self.stream_index,
+            'codec_name': self.codec_name,
+            'language': self.language,
+            'title': self.title,
+            'is_soft_subtitle': self.is_soft_subtitle
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'SubtitleTrack':
+        return cls(
+            stream_index=data.get('stream_index', 0),
+            codec_name=data.get('codec_name', ''),
+            language=data.get('language', ''),
+            title=data.get('title', ''),
+            is_soft_subtitle=data.get('is_soft_subtitle', True)
+        )
+
+    @property
+    def display_name(self) -> str:
+        """获取显示名称"""
+        lang_map = {
+            'en': 'English',
+            'zh': '中文',
+            'ja': '日本語',
+            'ko': '한국어',
+            'fr': 'Français',
+            'de': 'Deutsch',
+            'es': 'Español',
+            'ru': 'Русский',
+        }
+        lang = lang_map.get(self.language, self.language.upper())
+        codec = self.codec_name.upper()
+        title = f" ({self.title})" if self.title else ""
+        return f"{lang}{title} [{codec}]"
 
 
 # ============================================================================

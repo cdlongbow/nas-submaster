@@ -23,6 +23,9 @@ from utils.format_utils import format_file_size
 PAGE_SIZE_OPTIONS = [25, 50, 100]
 DEFAULT_PAGE_SIZE = 50
 
+# 目标语言代码映射（与 core/models.py 一致）
+TARGET_LANG_CODES = {'zh', 'chs', 'cht', 'en', 'eng'}
+
 
 def render_media_library_page(debug_mode: bool = False):
     """渲染媒体库页面"""
@@ -35,10 +38,10 @@ def render_media_library_page(debug_mode: bool = False):
 
     # ========== 列 1: 筛选器 ==========
     with col_filter:
-        filter_type = st.radio(
+        filter_options = ["全部", "待处理(有字幕)", "待处理(无字幕)", "已有目标字幕"]
+        filter_type = st.selectbox(
             "筛选",
-            ["全部", "有字幕", "无字幕"],
-            horizontal=True,
+            filter_options,
             label_visibility="collapsed"
         )
 
@@ -68,8 +71,14 @@ def render_media_library_page(debug_mode: bool = False):
         if st.button(refresh_text, use_container_width=True):
             _perform_scan(selected_dirs, debug_mode)
 
-    filter_map = {"全部": None, "有字幕": True, "无字幕": False}
-    has_subtitle_filter = filter_map[filter_type]
+    # 筛选逻辑：全部/有字幕/无字幕/已有目标字幕
+    filter_map = {
+        "全部": None,
+        "待处理(有字幕)": "has_subtitle",
+        "待处理(无字幕)": "no_subtitle",
+        "已有目标字幕": "has_target_subtitle"
+    }
+    subtitle_filter = filter_map.get(filter_type)
 
     # 筛选条件或目录变化时重置到第 1 页
     filter_key = f"{filter_type}|{','.join(selected_dirs)}"
@@ -81,10 +90,17 @@ def render_media_library_page(debug_mode: bool = False):
     page_size = st.session_state.get('_media_page_size', DEFAULT_PAGE_SIZE)
 
     # ========== 加载文件 ==========
-    # 有目录过滤时需要 Python 端过滤，加载全量后切片；否则走 SQL LIMIT/OFFSET
+    # 有目录过滤或细分筛选时需要 Python 端过滤
     try:
-        if selected_dirs:
-            all_files = MediaDAO.get_media_files_filtered(has_subtitle_filter)
+        # 根据筛选条件加载文件
+        if subtitle_filter in ["has_subtitle", "no_subtitle", "has_target_subtitle"]:
+            # 细分筛选：先加载全量，再用 Python 过滤
+            all_files = MediaDAO.get_media_files_filtered(None)  # 加载全部
+            filtered_files = _filter_files_by_subtitle_status(all_files, subtitle_filter)
+        elif selected_dirs:
+            # 目录筛选：加载有字幕或无字幕
+            has_subtitle = None  # 暂不支持细粒度目录筛选
+            all_files = MediaDAO.get_media_files_filtered(has_subtitle)
             filtered_files = []
             for f in all_files:
                 fpath = Path(f.file_path)
@@ -96,15 +112,33 @@ def render_media_library_page(debug_mode: bool = False):
                         break
                     except ValueError:
                         continue
+        else:
+            # 全部文件
+            filtered_files = MediaDAO.get_media_files_filtered(None)
             total_count = len(filtered_files)
             start = current_page * page_size
             page_files = filtered_files[start:start + page_size]
-        else:
-            total_count = MediaDAO.get_media_files_count(has_subtitle_filter)
+
+        # 应用目录筛选后计数
+        if subtitle_filter in ["has_subtitle", "no_subtitle", "has_target_subtitle"]:
+            if selected_dirs:
+                # 进一步按目录过滤
+                final_files = []
+                for f in filtered_files:
+                    fpath = Path(f.file_path)
+                    for d in selected_dirs:
+                        dir_path = Path(MEDIA_ROOT) / d
+                        try:
+                            fpath.relative_to(dir_path)
+                            final_files.append(f)
+                            break
+                        except ValueError:
+                            continue
+                filtered_files = final_files
+
+            total_count = len(filtered_files)
             start = current_page * page_size
-            page_files = MediaDAO.get_media_files_filtered(
-                has_subtitle_filter, limit=page_size, offset=start
-            )
+            page_files = filtered_files[start:start + page_size]
     except Exception as e:
         st.error(f"加载媒体库失败: {e}")
         return
@@ -255,6 +289,53 @@ def _add_tasks_for_selected_files():
     st.rerun()
 
 
+def _filter_files_by_subtitle_status(files, filter_type: str):
+    """
+    根据字幕状态筛选文件
+
+    Args:
+        files: 文件列表
+        filter_type: 筛选类型
+            - "has_subtitle": 有字幕（但不是目标语言）
+            - "no_subtitle": 无字幕
+            - "has_target_subtitle": 已有目标语言字幕
+
+    Returns:
+        筛选后的文件列表
+    """
+    # 目标语言字幕的语言代码
+    target_langs = {'zh', 'chs', 'cht'}
+
+    result = []
+    for f in files:
+        if filter_type == "no_subtitle":
+            # 无字幕
+            if not f.subtitles:
+                result.append(f)
+        elif filter_type == "has_subtitle":
+            # 有字幕，但不是目标语言字幕（可翻译）
+            if f.subtitles:
+                # 检查是否有非目标语言的字幕
+                has_translatable = False
+                for sub in f.subtitles:
+                    lang = sub.lang.lower()
+                    if lang not in target_langs and lang not in ['unknown', '']:
+                        has_translatable = True
+                        break
+                if has_translatable:
+                    result.append(f)
+        elif filter_type == "has_target_subtitle":
+            # 已有目标语言字幕（可跳过）
+            if f.subtitles:
+                for sub in f.subtitles:
+                    lang = sub.lang.lower()
+                    if lang in target_langs:
+                        result.append(f)
+                        break
+
+    return result
+
+
 def _perform_scan(subdirectories: list, debug_mode: bool):
     """执行扫描操作"""
     with st.spinner("扫描中..."):
@@ -283,19 +364,31 @@ def _perform_scan(subdirectories: list, debug_mode: bool):
 
 def _render_media_card(media_file):
     """渲染单个媒体文件卡片"""
+    # 目标语言字幕的语言代码
+    target_langs = {'zh', 'chs', 'cht'}
+
     if not media_file.subtitles:
         badges = "<span class='status-chip chip-red'>无字幕</span>"
     else:
         badges = ""
+        has_target_lang = False
+        has_other_lang = False
+
         for sub in media_file.subtitles:
             lang = sub.lang.lower()
-            if lang in ['zh', 'chs', 'cht']:
-                cls = "chip-green"
-            elif lang in ['en', 'eng']:
-                cls = "chip-blue"
-            else:
-                cls = "chip-gray"
-            badges += f"<span class='status-chip {cls}'>{html.escape(sub.tag)}</span>"
+            if lang in target_langs:
+                has_target_lang = True
+            elif lang not in ['unknown', '']:
+                has_other_lang = True
+
+        # 显示状态
+        if has_target_lang:
+            badges += "<span class='status-chip chip-green'>✓ 已有目标字幕</span>"
+        if has_other_lang:
+            badges += "<span class='status-chip chip-blue'>○ 有字幕可翻译</span>"
+        if not has_target_lang and not has_other_lang:
+            # 只有未知语言的字幕
+            badges += "<span class='status-chip chip-gray'>○ 有字幕</span>"
 
     file_name = html.escape(media_file.file_name)
     file_path = html.escape(media_file.file_path)
