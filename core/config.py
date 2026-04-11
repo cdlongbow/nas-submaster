@@ -16,7 +16,8 @@ from core.models import (
     WhisperConfig,
     TranslationConfig,
     ExportConfig,
-    VADParameters
+    VADParameters,
+    PromptTemplate
 )
 
 
@@ -78,6 +79,49 @@ CONTENT_TYPE_DESCRIPTIONS = {
     ContentType.LECTURE: '注重完整语句识别，增加停顿缓冲。适合教学视频、演讲、培训课程。',
     ContentType.MUSIC: '极高阈值仅提取人声，忽略背景音乐。适合 MV、音乐会、歌唱节目。',
     ContentType.CUSTOM: '默认配置，也可以手动调整 VAD 参数以满足特殊需求。'
+}
+
+
+# ============================================================================
+# 默认翻译提示词模板
+# ============================================================================
+
+TRANSLATION_PROMPTS = {
+    ContentType.MOVIE: PromptTemplate(
+        role="你是一位专业电影字幕翻译专家，擅长翻译电影和电视剧中的对话。",
+        rules="1. 保持口语化对话风格，符合日常说话习惯\n2. 传达情感和语气，保留角色的情绪色彩\n3. 人名、地名等专有名词保持原文或使用常见译名\n4. 避免过度翻译，保持原意的同时让观众容易理解",
+        style_guide="电影字幕应简洁，通常不超过15个字一行。注意断句的自然性，保留对话的节奏感和戏剧张力。"
+    ),
+    ContentType.DOCUMENTARY: PromptTemplate(
+        role="你是一位专业纪录片字幕翻译专家，擅长翻译纪录片和新闻节目的旁白。",
+        rules="1. 保持说明性语言的严谨性和准确性\n2. 准确翻译专业术语，必要时可在括号中标注原文\n3. 保持逻辑清晰，句式结构完整\n4. 注意中英文术语的使用习惯差异",
+        style_guide="纪录片字幕应清晰准确，适合观众阅读。保持专业但不失流畅，让观众能够快速理解内容。"
+    ),
+    ContentType.VARIETY: PromptTemplate(
+        role="你是一位专业综艺节目字幕翻译专家，擅长翻译综艺节目、脱口秀和访谈节目。",
+        rules="1. 口语化翻译，符合综艺节目的轻松氛围\n2. 保留节目中的梗、双关语和幽默元素，尽量本地化\n3. 方言或口语表达尽量转化为目标语言中对应的表达\n4. 笑声、掌声等音效标注可用括号说明",
+        style_guide="综艺字幕应活泼有趣，适合年轻观众群体。翻译可以更加自由，发挥创意让观众获得与原版相近的笑点。"
+    ),
+    ContentType.ANIMATION: PromptTemplate(
+        role="你是一位专业动画字幕翻译专家，擅长翻译动画、动漫和卡通片。",
+        rules="1. 保持动画角色的性格特点和说话风格\n2. 拟声词、感叹词等要符合动画的夸张风格\n3. 童趣表达要适合目标语言的儿童观众\n4. 保持对话的简洁和趣味性",
+        style_guide="动画字幕应活泼可爱，适合儿童和家庭观看。翻译时可以更加夸张和有趣，保持动画的欢乐氛围。"
+    ),
+    ContentType.LECTURE: PromptTemplate(
+        role="你是一位专业学术讲座字幕翻译专家，擅长翻译讲座、课程和演讲。",
+        rules="1. 保持学术语言的严谨性和专业性\n2. 准确翻译专业术语，可保留英文原文供参考\n3. 保持逻辑连贯，句式结构清晰\n4. 演讲中的重复和强调部分可适当精简",
+        style_guide="讲座字幕应清晰有条理，方便观众做笔记。句式可以稍长但要保持完整，适合学习者反复观看理解。"
+    ),
+    ContentType.MUSIC: PromptTemplate(
+        role="你是一位专业歌词翻译专家，擅长翻译歌曲、MV和音乐节目。",
+        rules="1. 尽量保持歌词的韵律和节奏感\n2. 意译优先，传达歌词的情感和意境\n3. 歌曲中的重复部分可适当精简\n4. 保留歌手特有的表达风格",
+        style_guide="歌词字幕应优美流畅，尽量保留原词的韵脚和节奏感。翻译时可以调整语序以适应目标语言的表达习惯。"
+    ),
+    ContentType.CUSTOM: PromptTemplate(
+        role="你是一位专业字幕翻译专家。",
+        rules="1. 翻译应准确传达原意\n2. 保持语言自然流畅\n3. 符合目标语言的口语或书面习惯",
+        style_guide="字幕翻译应根据具体内容类型调整风格，保持一致性和可读性。"
+    )
 }
 
 
@@ -154,11 +198,23 @@ class AppConfig:
     
     # 各提供商的配置
     provider_configs: Dict[str, ProviderConfig] = field(default_factory=dict)
-    
+
+    # 各内容类型的翻译提示词模板
+    prompt_templates: Dict[ContentType, PromptTemplate] = field(default_factory=dict)
+
     def get_vad_parameters(self) -> VADParameters:
         """获取当前内容类型的 VAD 参数"""
         return VAD_PRESETS.get(self.content_type, VAD_PRESETS[ContentType.MOVIE])
-    
+
+    def get_prompt_template(self, content_type: ContentType = None) -> PromptTemplate:
+        """获取指定内容类型的翻译提示词模板"""
+        if content_type is None:
+            content_type = self.content_type
+        # 用户已自定义模板则使用用户的，否则使用默认模板
+        if content_type in self.prompt_templates:
+            return self.prompt_templates[content_type]
+        return TRANSLATION_PROMPTS.get(content_type, TRANSLATION_PROMPTS[ContentType.CUSTOM])
+
     def get_current_provider_config(self) -> ProviderConfig:
         """获取当前提供商的配置"""
         if self.current_provider not in self.provider_configs:
@@ -195,6 +251,9 @@ class AppConfig:
             'current_provider': self.current_provider,
             'provider_configs': {
                 k: v.to_dict() for k, v in self.provider_configs.items()
+            },
+            'prompt_templates': {
+                k.value: v.to_dict() for k, v in self.prompt_templates.items()
             }
         }
     
@@ -223,17 +282,28 @@ class AppConfig:
         # 解析提供商配置
         provider_configs_data = data.get('provider_configs', {})
         provider_configs = {
-            k: ProviderConfig.from_dict(v) 
+            k: ProviderConfig.from_dict(v)
             for k, v in provider_configs_data.items()
         }
-        
+
+        # 解析提示词模板配置
+        prompt_templates_data = data.get('prompt_templates', {})
+        prompt_templates = {}
+        for k, v in prompt_templates_data.items():
+            try:
+                ct = ContentType(k)
+                prompt_templates[ct] = PromptTemplate.from_dict(v)
+            except ValueError:
+                continue
+
         return cls(
             whisper=whisper,
             translation=translation,
             export=export,
             content_type=content_type,
             current_provider=data.get('current_provider', 'Ollama (本地模型)'),
-            provider_configs=provider_configs
+            provider_configs=provider_configs,
+            prompt_templates=prompt_templates
         )
 
 

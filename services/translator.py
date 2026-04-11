@@ -62,22 +62,24 @@ class SubtitleTranslator:
         'es': '西班牙语 (Spanish)'
     }
     
-    def __init__(self, config: TranslationConfig, progress_callback=None):
+    def __init__(self, config: TranslationConfig, progress_callback=None, prompt_template=None):
         """
         初始化翻译器
-        
+
         Args:
             config: 翻译配置
             progress_callback: 进度回调函数 (current, total, message)
+            prompt_template: 提示词模板，如果为 None 则使用内置默认提示词
         """
         self.config = config
         self.progress_callback = progress_callback
-        
+        self.prompt_template = prompt_template
+
         # 初始化 OpenAI 客户端
         api_key = config.api_key
         if "ollama" in config.base_url.lower():
             api_key = "ollama"
-        
+
         self.client = OpenAI(api_key=api_key, base_url=config.base_url)
     
     def _update_progress(self, current: int, total: int, message: str):
@@ -93,27 +95,27 @@ class SubtitleTranslator:
         )
     
     def _build_translation_prompt(
-        self, 
+        self,
         entries: List[SubtitleEntry],
         context_before: Optional[str] = None,
         context_after: Optional[str] = None
     ) -> str:
         """
         构建翻译 prompt（使用 JSON 格式）
-        
+
         Args:
             entries: 要翻译的字幕条目
             context_before: 前文上下文（仅供参考，不翻译）
             context_after: 后文上下文（仅供参考，不翻译）
         """
         target_lang = self._get_target_lang_name()
-        
+
         # 构建输入 JSON
         input_json = [
             {"line": i+1, "text": entry.text}
             for i, entry in enumerate(entries)
         ]
-        
+
         # 上下文提示
         context_hint = ""
         if context_before or context_after:
@@ -122,23 +124,33 @@ class SubtitleTranslator:
                 context_hint += f"\nPrevious line: \"{context_before}\""
             if context_after:
                 context_hint += f"\nNext line: \"{context_after}\""
-        
-        prompt = f"""You are a professional subtitle translator. Translate the following dialogue to {target_lang}.
 
-CRITICAL RULES:
-1. Output MUST be valid JSON array with EXACTLY {len(entries)} objects
-2. Each object MUST have "line" (number) and "translation" (string) fields
-3. Keep translations natural and concise - match the style of {target_lang} subtitles
-4. Preserve character names, proper nouns, and technical terms appropriately
-5. DO NOT add punctuation at the end unless present in the original
-6. DO NOT merge, split, or skip any lines
-7. If a line is untranslatable (music notes, sound effects), keep it as-is
-8. IMPORTANT: Output COMPLETE JSON array - DO NOT use "..." to abbreviate{context_hint}
+        # 使用用户配置的提示词模板或内置默认
+        if self.prompt_template:
+            role = self.prompt_template.role
+            rules = self.prompt_template.rules
+            style_guide = self.prompt_template.style_guide
+        else:
+            role = "You are a professional subtitle translator."
+            rules = "1. Keep translations natural and concise\n2. Preserve character names and proper nouns\n3. DO NOT add punctuation unless present in original\n4. Output valid JSON array"
+            style_guide = "Subtitle style: concise, readable"
+
+        prompt = f"""{role} Translate the following dialogue to {target_lang}.
+
+STYLE GUIDE:
+{style_guide}
+
+RULES:
+{rules}
+
+OUTPUT FORMAT:
+Output MUST be valid JSON array with EXACTLY {len(entries)} objects.
+Each object MUST have "line" (number) and "translation" (string) fields.{context_hint}
 
 INPUT ({len(entries)} lines):
 {json.dumps(input_json, ensure_ascii=False, indent=2)}
 
-OUTPUT FORMAT (valid JSON array with ALL {len(entries)} items):
+OUTPUT (valid JSON array with ALL {len(entries)} items):
 [
   {{"line": 1, "translation": "..."}},
   {{"line": 2, "translation": "..."}},
@@ -146,10 +158,8 @@ OUTPUT FORMAT (valid JSON array with ALL {len(entries)} items):
   {{"line": {len(entries)}, "translation": "..."}}
 ]
 
-REMINDER: You MUST include ALL {len(entries)} translations. DO NOT abbreviate with "..." in the actual output.
-
 Now output the COMPLETE JSON array (no extra text, no abbreviations):"""
-        
+
         return prompt
     
     def _parse_translation_response(
@@ -469,17 +479,19 @@ def translate_srt_file(
     input_path: str,
     config: TranslationConfig,
     output_path: Optional[str] = None,
-    progress_callback=None
+    progress_callback=None,
+    prompt_template=None
 ) -> Tuple[bool, str]:
     """
     翻译 SRT 文件（高级封装）
-    
+
     Args:
         input_path: 输入 SRT 文件路径
         config: 翻译配置
         output_path: 输出路径（默认：原文件名.{target_lang}.srt）
         progress_callback: 进度回调
-    
+        prompt_template: 提示词模板，如果为 None 则使用内置默认提示词
+
     Returns:
         (成功标志, 消息)
     """
@@ -488,24 +500,24 @@ def translate_srt_file(
         entries = parse_srt_file(input_path)
         if not entries:
             return False, "字幕文件为空或格式错误"
-        
+
         # 执行翻译
-        translator = SubtitleTranslator(config, progress_callback)
+        translator = SubtitleTranslator(config, progress_callback, prompt_template)
         translated_entries = translator.translate_subtitles(entries)
-        
+
         # 生成输出路径
         if output_path is None:
             input_file = Path(input_path)
             output_path = str(
-                input_file.parent / 
+                input_file.parent /
                 f"{input_file.stem}.{config.target_language}.srt"
             )
-        
+
         # 保存翻译结果
         save_srt_file(translated_entries, output_path)
-        
+
         return True, f"翻译完成，已保存到: {output_path}"
-        
+
     except TranslationError as e:
         return False, f"翻译失败: {e}"
     except Exception as e:

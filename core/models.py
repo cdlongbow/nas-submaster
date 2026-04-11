@@ -168,13 +168,36 @@ class TranslationConfig:
 class ExportConfig:
     """导出配置"""
     formats: List[str] = field(default_factory=lambda: ['srt'])
-    
+
     def to_dict(self) -> Dict:
         return {'formats': self.formats}
-    
+
     @classmethod
     def from_dict(cls, data: Dict) -> 'ExportConfig':
         return cls(formats=data.get('formats', ['srt']))
+
+
+@dataclass
+class PromptTemplate:
+    """翻译提示词模板（三段式结构）"""
+    role: str = ''           # 角色定义（你是什么专家）
+    rules: str = ''          # 翻译规则（必须遵守的规则）
+    style_guide: str = ''    # 风格指导（语气、表达方式等）
+
+    def to_dict(self) -> Dict:
+        return {
+            'role': self.role,
+            'rules': self.rules,
+            'style_guide': self.style_guide
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'PromptTemplate':
+        return cls(
+            role=data.get('role', ''),
+            rules=data.get('rules', ''),
+            style_guide=data.get('style_guide', '')
+        )
 
 
 # ============================================================================

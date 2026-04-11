@@ -12,10 +12,11 @@ from typing import List, Tuple
 from core.config import (
     ConfigManager,
     LLM_PROVIDERS,
+    TRANSLATION_PROMPTS,
     get_content_type_display_name,
     get_content_type_description
 )
-from core.models import ContentType, ISO_LANG_MAP, TARGET_LANG_OPTIONS, WHISPER_SOURCE_LANG_MAP
+from core.models import ContentType, ISO_LANG_MAP, TARGET_LANG_OPTIONS, WHISPER_SOURCE_LANG_MAP, PromptTemplate
 from database.connection import get_db_connection
 
 
@@ -104,18 +105,16 @@ def render_settings_dialog():
     model_changes = {}
     trans_changes = {}
     export_changes = {}
-    
-    # 调试模式 (已移除)
-    # st.session_state['debug_mode'] = st.session_state.get('debug_mode', False)
-    # remove spacer 
+    prompt_changes = {}  # 提示词配置变更
 
     # 创建 Tabs: 拆分 Whisper 设置 和 语音识别参数
-    tab_whisper, tab_params, tab_model, tab_trans, tab_export = st.tabs([
-        "Whisper 设置", 
+    tab_whisper, tab_params, tab_model, tab_trans, tab_export, tab_prompts = st.tabs([
+        "Whisper 设置",
         "语音识别参数",
-        "翻译模型配置", 
-        "翻译设置", 
-        "字幕格式"
+        "翻译模型配置",
+        "翻译设置",
+        "字幕格式",
+        "提示词设置"
     ])
     
     # 1. Whisper 设置 (硬件/模型)
@@ -357,25 +356,101 @@ def render_settings_dialog():
             
         export_changes['export_formats'] = new_formats
 
+    # 6. 提示词设置
+    with tab_prompts:
+        st.subheader("翻译提示词配置")
+        st.caption("为不同内容类型配置专属的翻译提示词，提升翻译质量")
+
+        # 内容类型子 Tab（不包含 CUSTOM，翻译提示词不需要）
+        content_type_tab_names = ["电影", "纪录片", "综艺", "动画", "讲座", "音乐"]
+        content_type_keys = [
+            ContentType.MOVIE,
+            ContentType.DOCUMENTARY,
+            ContentType.VARIETY,
+            ContentType.ANIMATION,
+            ContentType.LECTURE,
+            ContentType.MUSIC
+        ]
+
+        tabs_prompt_content = st.tabs(content_type_tab_names)
+
+        # 初始化提示词变更（如果不存在）
+        if 'prompt_templates' not in prompt_changes:
+            prompt_changes['prompt_templates'] = {}
+
+        for idx, ct in enumerate(content_type_keys):
+            with tabs_prompt_content[idx]:
+                # 获取当前模板（用户已保存的或默认的）
+                user_template = config.prompt_templates.get(ct)
+                default_template = TRANSLATION_PROMPTS.get(ct)
+                current_template = user_template if user_template else default_template
+
+                st.markdown("**角色定义**（定义翻译者身份）")
+                role = st.text_area(
+                    "角色定义",
+                    value=current_template.role if current_template else "",
+                    height=80,
+                    key=f"prompt_role_{ct.value}",
+                    label_visibility="collapsed"
+                )
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("**翻译规则**（必须遵守的规则，每行一条）")
+                rules = st.text_area(
+                    "翻译规则",
+                    value=current_template.rules if current_template else "",
+                    height=120,
+                    key=f"prompt_rules_{ct.value}",
+                    label_visibility="collapsed"
+                )
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("**风格指导**（语气、表达方式等）")
+                style = st.text_area(
+                    "风格指导",
+                    value=current_template.style_guide if current_template else "",
+                    height=80,
+                    key=f"prompt_style_{ct.value}",
+                    label_visibility="collapsed"
+                )
+
+                # 记录变更
+                prompt_changes['prompt_templates'][ct] = PromptTemplate(
+                    role=role,
+                    rules=rules,
+                    style_guide=style
+                )
+
+                # 重置为默认按钮
+                col_reset, col_spacer = st.columns([1, 5])
+                with col_reset:
+                    default_tpl = TRANSLATION_PROMPTS.get(ct)
+                    if st.button("重置为默认", key=f"reset_prompt_{ct.value}", use_container_width=True):
+                        st.session_state[f"prompt_role_{ct.value}"] = default_tpl.role if default_tpl else ""
+                        st.session_state[f"prompt_rules_{ct.value}"] = default_tpl.rules if default_tpl else ""
+                        st.session_state[f"prompt_style_{ct.value}"] = default_tpl.style_guide if default_tpl else ""
+                        st.toast(f"已重置为 {content_type_tab_names[idx]} 默认提示词")
+                        st.rerun()
+
     st.markdown("---")
-    
+
     # 底部保存按钮
     if st.button("保存所有设置", type="primary", use_container_width=True):
-        _save_full_config(config_manager, whisper_changes, model_changes, trans_changes, export_changes)
+        _save_full_config(config_manager, whisper_changes, model_changes, trans_changes, export_changes, prompt_changes)
         st.rerun()
 
 
-def _save_full_config(mgr, w_changes, m_changes, t_changes, e_changes):
+def _save_full_config(mgr, w_changes, m_changes, t_changes, e_changes, p_changes):
     """保存逻辑"""
     config = mgr.load()
-    
+
     # Whisper
     config.whisper.model_size = w_changes['whisper_model']
     config.whisper.compute_type = w_changes['compute_type']
     config.whisper.device = w_changes['device']
     config.whisper.source_language = w_changes['source_language']
     config.content_type = w_changes['content_type']
-    
+
     # Models
     config.update_provider_config(
         m_changes['provider'],
@@ -383,15 +458,19 @@ def _save_full_config(mgr, w_changes, m_changes, t_changes, e_changes):
         m_changes['base_url'],
         m_changes['model_name']
     )
-    
+
     # Translation
     config.translation.enabled = t_changes['enable_translation']
     config.translation.target_language = t_changes['target_language']
     config.translation.max_lines_per_batch = t_changes['max_lines_per_batch']
-    
+
     # Export
     config.export.formats = e_changes['export_formats']
-    
+
+    # Prompt Templates
+    if 'prompt_templates' in p_changes:
+        config.prompt_templates = p_changes['prompt_templates']
+
     # Save
     if mgr.save(config):
         st.toast("配置已保存")

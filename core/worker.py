@@ -283,6 +283,9 @@ class TaskWorker:
                 max_lines_per_batch=config.translation.max_lines_per_batch
             )
 
+            # 获取当前内容类型对应的提示词模板
+            prompt_template = config.get_prompt_template(config.content_type)
+
             def progress_callback(current, total, message):
                 progress = 50 + int((current / total) * 45)
                 # 翻译进度高频更新，仅覆盖 log 不写历史
@@ -291,7 +294,8 @@ class TaskWorker:
             success, msg = translate_srt_file(
                 srt_path,
                 trans_config,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                prompt_template=prompt_template
             )
 
             if not success:
