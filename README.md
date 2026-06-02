@@ -210,6 +210,9 @@ A: 可以通过 `docker logs -f nas-subtitle` 查看后端详细运行日志。
 **Q: 报 `Library libcublas.so.12 is not found` 怎么办？**
 A: 拉取最新镜像（`docker compose pull`）即可。最新镜像基于 `nvidia/cuda` 构建，cuBLAS 库已内置。日志中如果出现 `CUDA 不可用，自动回退到 CPU` 是正常行为，说明 GPU 暂时不可用但任务仍能继续。如需强制 GPU，请检查宿主机 `nvidia-container-toolkit` 是否安装正确（参见上方"启用 GPU 加速"章节）。
 
+**Q: 设置里改了提示词但保存后再打开又恢复成默认了？**
+A: 已在最新 commit 修复（`ConfigManager` 的 save/load 缺 `prompt_templates` 字段）。`docker compose pull` 拉取最新镜像后，改提示词 → 保存 → 刷新页面即可保留。如果"重置为默认"按钮还会触发红色报错，请把完整错误文本贴到 issue 便于排查。
+
 ---
 
 ## 📄 开源协议
