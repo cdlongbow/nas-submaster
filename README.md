@@ -231,4 +231,8 @@ A: 已在最新 commit 修复（`ConfigManager` 的 save/load 缺 `prompt_templa
 
 ---
 
-**⭐ 如果这个项目对你有帮助，欢迎在 GitHub 上点个 Star！**
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=aexachao/nas-submaster&type=Date)](https://star-history.com/#aexachao/nas-submaster)
+
+**如果这个项目对你有帮助，欢迎在 GitHub 上点个 Star！**
