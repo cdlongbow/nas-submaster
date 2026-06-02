@@ -23,6 +23,8 @@ NAS SubMaster (NAS 字幕管家)
 
 它能够自动扫描 NAS 媒体库，支持 **3级子目录精确筛选**，利用 **Faster-Whisper** 提取语音，并调用 **大语言模型 (LLM)** 生成高质量的中文字幕。
 
+> ⭐ **如果这个项目对你有帮助，欢迎在 GitHub 上点个 Star 支持一下！**
+
 ---
 
 ## ✨ 核心特性
@@ -234,5 +236,3 @@ A: 已在最新 commit 修复（`ConfigManager` 的 save/load 缺 `prompt_templa
 ## ⭐ Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=aexachao/nas-submaster&type=Date)](https://star-history.com/#aexachao/nas-submaster)
-
-**如果这个项目对你有帮助，欢迎在 GitHub 上点个 Star！**
