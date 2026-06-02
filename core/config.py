@@ -353,7 +353,8 @@ class ConfigManager:
                 'export': json.loads(config_dict.get('export_formats', '{"formats": ["srt"]}')),
                 'content_type': config_dict.get('content_type', 'movie'),
                 'current_provider': config_dict.get('current_provider', 'Ollama (本地模型)'),
-                'provider_configs': json.loads(config_dict.get('provider_configs', '{}'))
+                'provider_configs': json.loads(config_dict.get('provider_configs', '{}')),
+                'prompt_templates': json.loads(config_dict.get('prompt_templates', '{}'))
             }
             
             # ✅ 修改：加载完成后更新缓存
@@ -394,6 +395,10 @@ class ConfigManager:
                 'current_provider': config.current_provider,
                 'provider_configs': json.dumps(
                     {k: v.to_dict() for k, v in config.provider_configs.items()},
+                    ensure_ascii=False
+                ),
+                'prompt_templates': json.dumps(
+                    {k.value: v.to_dict() for k, v in config.prompt_templates.items()},
                     ensure_ascii=False
                 )
             }
