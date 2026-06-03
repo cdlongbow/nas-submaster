@@ -6,3 +6,10 @@ __pycache__
 data/
 media/
 .DS_Store
+tests/
+pytest.ini
+conftest.py
+requirements-test.txt
+.github/
+*.md
+docker-compose*.yml
