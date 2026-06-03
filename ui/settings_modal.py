@@ -36,7 +36,8 @@ def test_api_connection(api_key: str, base_url: str, model: str) -> Tuple[bool, 
                 api_key=api_key,
                 base_url=base_url,
                 model_name=model,
-                target_language='zh'
+                target_language='zh',
+                timeout=10
             )
             translator = SubtitleTranslator(config)
             

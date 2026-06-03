@@ -76,11 +76,18 @@ class SubtitleTranslator:
         self.prompt_template = prompt_template
 
         # 初始化 OpenAI 客户端
+        # Ollama 不需要 API Key，但 openai 库要求非空值
         api_key = config.api_key
-        if "ollama" in config.base_url.lower():
+        if not api_key or not api_key.strip():
+            api_key = "ollama"
+        elif "ollama" in config.base_url.lower():
             api_key = "ollama"
 
-        self.client = OpenAI(api_key=api_key, base_url=config.base_url)
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=config.base_url,
+            timeout=config.timeout,
+        )
     
     def _update_progress(self, current: int, total: int, message: str):
         """更新进度"""
