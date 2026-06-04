@@ -15,7 +15,8 @@ from core.config import (
     TRANSLATION_PROMPTS,
     get_content_type_display_name,
     get_content_type_description,
-    APP_VERSION
+    APP_VERSION,
+    get_recommended_batch_size
 )
 from core.models import ContentType, ISO_LANG_MAP, TARGET_LANG_OPTIONS, WHISPER_SOURCE_LANG_MAP, PromptTemplate
 from database.connection import get_db_connection
@@ -342,6 +343,7 @@ def render_settings_dialog():
                     st.toast("模型列表已刷新")
                     st.rerun()
             api_key = ""
+            st.session_state._recommended_batch_size = 500  # Ollama 默认
         else:
             available_models = LLM_PROVIDERS.get(provider, {}).get("models", [])
             if available_models:
@@ -369,6 +371,8 @@ def render_settings_dialog():
                     )
                 else:
                     model_name = selected
+                # 联动：记录当前模型的推荐批处理行数
+                st.session_state._recommended_batch_size = get_recommended_batch_size(model_name)
             else:
                 model_name = st.text_input("模型名称", value=provider_cfg.model_name, key=f"set_model_{provider}")
             api_key = st.text_input(
@@ -435,10 +439,17 @@ def render_settings_dialog():
 
         st.markdown("<br>", unsafe_allow_html=True)
 
+        recommended = st.session_state.get('_recommended_batch_size', 500)
+        current_batch = config.translation.max_lines_per_batch
+        batch_help = f"当前模型推荐值: {recommended}"
+        if current_batch != recommended:
+            batch_help += f"（点击右侧 +/- 可调整，或直接输入）"
+
         batch_size = st.number_input(
             "批处理行数 (长视频分批翻译)",
             min_value=50, max_value=5000, step=50,
-            value=config.translation.max_lines_per_batch
+            value=recommended,
+            help=batch_help
         )
         trans_changes['max_lines_per_batch'] = batch_size
 

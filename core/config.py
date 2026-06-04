@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, asdict
 
 
 # 应用版本号（每次发版手动更新）
-APP_VERSION = "v1.4.0"
+APP_VERSION = "v1.5.0"
 
 from core.models import (
     ContentType,
@@ -127,6 +127,55 @@ TRANSLATION_PROMPTS = {
         style_guide="字幕翻译应根据具体内容类型调整风格，保持一致性和可读性。"
     )
 }
+
+
+# ============================================================================
+# 模型推荐批处理行数（根据上下文窗口大小）
+# ============================================================================
+
+MODEL_BATCH_SIZES = {
+    # DeepSeek
+    "deepseek-v4-flash": 800,
+    "deepseek-v4-pro": 1000,
+    "deepseek-chat": 500,
+    "deepseek-reasoner": 500,
+    # Google Gemini
+    "gemini-2.5-flash": 1500,
+    "gemini-2.5-pro": 1500,
+    "gemini-3-flash": 1500,
+    "gemini-3.1-pro": 1500,
+    # Moonshot / Kimi
+    "kimi-k2.6": 800,
+    "kimi-k2.5": 800,
+    "kimi-k2-thinking": 800,
+    "moonshot-v1-128k": 800,
+    "moonshot-v1-32k": 300,
+    "moonshot-v1-8k": 100,
+    # Aliyun / Qwen
+    "qwen3.7-max": 800,
+    "qwen3.7-plus": 800,
+    "qwen3.6-flash": 800,
+    # ZhipuAI / GLM
+    "GLM-5.1": 800,
+    "GLM-5": 800,
+    "GLM-4.7": 800,
+    "GLM-4.7-Flash": 800,
+    "GLM-4.5-Air": 800,
+    "GLM-4-Long": 1500,
+    # OpenAI
+    "gpt-5.5": 1000,
+    "gpt-5.4": 800,
+    "gpt-5.4-mini": 800,
+    "gpt-4o": 800,
+    "gpt-4o-mini": 800,
+}
+
+DEFAULT_BATCH_SIZE = 500
+
+
+def get_recommended_batch_size(model_name: str) -> int:
+    """获取模型的推荐批处理行数，未知模型返回默认值"""
+    return MODEL_BATCH_SIZES.get(model_name, DEFAULT_BATCH_SIZE)
 
 
 # ============================================================================
