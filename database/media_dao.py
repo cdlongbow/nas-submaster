@@ -243,6 +243,56 @@ class MediaDAO:
             conn.close()
     
     @staticmethod
+    def batch_delete_media_files(file_paths: List[str]) -> int:
+        """
+        批量删除媒体文件记录
+
+        Args:
+            file_paths: 要删除的文件路径列表
+
+        Returns:
+            实际删除的数量
+        """
+        if not file_paths:
+            return 0
+        conn = get_db_connection()
+        try:
+            placeholders = ','.join('?' for _ in file_paths)
+            cursor = conn.execute(
+                f"DELETE FROM media_files WHERE file_path IN ({placeholders})",
+                file_paths
+            )
+            conn.commit()
+            return cursor.rowcount
+        except Exception as e:
+            print(f"[MediaDAO] Failed to batch delete media files: {e}")
+            conn.rollback()
+            return 0
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_media_paths_by_prefix(dir_prefix: str) -> List[str]:
+        """
+        获取指定目录前缀下的所有文件路径（用于扫描后清理不存在的文件）
+
+        Args:
+            dir_prefix: 目录路径前缀
+
+        Returns:
+            文件路径列表
+        """
+        conn = get_db_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT file_path FROM media_files WHERE file_path LIKE ?",
+                (dir_prefix + '%',)
+            )
+            return [row[0] for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    @staticmethod
     def get_media_count() -> int:
         """
         获取媒体文件总数

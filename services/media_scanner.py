@@ -74,17 +74,17 @@ class MediaScanner:
         return sorted(subdirs)
     
     def scan_directory(
-        self, 
+        self,
         subdirectory: Optional[str] = None,
         debug: bool = False
     ) -> Tuple[int, List[str]]:
         """
         扫描媒体目录
-        
+
         Args:
             subdirectory: 子目录相对路径（None=扫描全部）
             debug: 是否输出调试日志
-        
+
         Returns:
             (新增文件数, 调试日志列表)
         """
@@ -95,41 +95,41 @@ class MediaScanner:
                 return 0, [f"子目录不存在: {subdirectory}"]
         else:
             scan_path = self.media_root
-        
+
         if not scan_path.exists():
             return 0, [f"路径不存在: {scan_path}"]
-        
+
         added_count = 0
         debug_logs = []
         batch_data = []
-        
+
         if debug:
             debug_logs.append(f"📂 扫描目录: {scan_path}")
-        
+
         try:
             # 遍历目录
             for root, dirs, files in os.walk(scan_path):
                 for file in files:
                     file_path = Path(root) / file
-                    
+
                     # 检查是否为支持的视频格式
                     if file_path.suffix.lower() not in SUPPORTED_VIDEO_EXTENSIONS:
                         continue
-                    
+
                     try:
                         # 扫描字幕文件
                         subtitles = self._scan_subtitles_for_video(file_path)
-                        
+
                         # 检查是否有翻译
                         has_translated = self._check_has_translation(subtitles)
-                        
+
                         # 准备批量插入数据
                         import json
                         subtitles_json = json.dumps(
                             [s.to_dict() for s in subtitles],
                             ensure_ascii=False
                         )
-                        
+
                         batch_data.append((
                             str(file_path),
                             file,
@@ -137,28 +137,73 @@ class MediaScanner:
                             subtitles_json,
                             int(has_translated)
                         ))
-                        
+
                         added_count += 1
-                        
+
                         if debug:
                             debug_logs.append(f"✓ 发现: {file}")
-                    
+
                     except Exception as e:
                         if debug:
                             debug_logs.append(f"✗ 错误 {file}: {e}")
-            
+
             # 批量写入数据库
             if batch_data:
                 MediaDAO.batch_add_or_update_media_files(batch_data)
                 if debug:
                     debug_logs.append(f"✓ 批量写入 {len(batch_data)} 条记录")
-        
+
+            # 清理：删除数据库中该目录下已不存在于磁盘的记录
+            removed_count = self._cleanup_stale_entries(scan_path, debug, debug_logs)
+            if removed_count > 0:
+                added_count_str = f"新增 {added_count}" if added_count > 0 else "无新增"
+                if debug:
+                    debug_logs.append(f"✓ 清理 {removed_count} 条已失效记录（{added_count_str}）")
+
         except Exception as e:
             print(f"[MediaScanner] Scan failed: {e}")
             if debug:
                 debug_logs.append(f"✗ 扫描失败: {e}")
-        
+
         return added_count, debug_logs
+
+    def _cleanup_stale_entries(
+        self,
+        scan_path: Path,
+        debug: bool,
+        debug_logs: List[str]
+    ) -> int:
+        """
+        清理数据库中已不存在于磁盘的记录
+
+        Args:
+            scan_path: 扫描的目录路径
+            debug: 是否输出调试日志
+            debug_logs: 调试日志列表
+
+        Returns:
+            删除的记录数
+        """
+        try:
+            db_paths = MediaDAO.get_media_paths_by_prefix(str(scan_path))
+            if not db_paths:
+                return 0
+
+            stale_paths = [p for p in db_paths if not Path(p).exists()]
+            if not stale_paths:
+                return 0
+
+            removed = MediaDAO.batch_delete_media_files(stale_paths)
+            if debug and removed > 0:
+                for p in stale_paths[:5]:
+                    debug_logs.append(f"🗑 清理已删除: {Path(p).name}")
+                if len(stale_paths) > 5:
+                    debug_logs.append(f"  ... 还有 {len(stale_paths) - 5} 个")
+
+            return removed
+        except Exception as e:
+            print(f"[MediaScanner] Cleanup failed: {e}")
+            return 0
     
     def _scan_subtitles_for_video(self, video_path: Path) -> List[SubtitleInfo]:
         """

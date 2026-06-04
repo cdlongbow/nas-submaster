@@ -31,9 +31,9 @@ def render_media_library_page(debug_mode: bool = False):
     """渲染媒体库页面"""
 
     # 顶部工具栏
-    # 比例: 筛选(2.2) | 空白(1.3) | 目录选择(3) | 扫描(0.8) | 开始(0.8)
-    col_filter, col_spacer, col_dir, col_scan, col_start = st.columns(
-        [2.2, 1.3, 3, 0.8, 0.8], vertical_alignment="bottom"
+    # 比例: 筛选(2.2) | 空白(0.8) | 目录选择(3) | 扫描(0.8) | 删除(0.8) | 开始(0.8)
+    col_filter, col_spacer, col_dir, col_scan, col_del, col_start = st.columns(
+        [2.2, 0.8, 3, 0.8, 0.8, 0.8], vertical_alignment="bottom"
     )
 
     # ========== 列 1: 筛选器 ==========
@@ -70,6 +70,16 @@ def render_media_library_page(debug_mode: bool = False):
         refresh_text = "扫描全部" if not selected_dirs else f"扫描 ({len(selected_dirs)})"
         if st.button(refresh_text, use_container_width=True):
             _perform_scan(selected_dirs, debug_mode)
+
+    # ========== 列 5: 批量删除按钮 ==========
+    with col_del:
+        if st.button(
+            "批量删除",
+            use_container_width=True,
+            disabled=(selected_count == 0),
+            help="从媒体库中删除选中的文件记录（不删除磁盘文件）"
+        ):
+            _delete_selected_files()
 
     # 筛选逻辑：全部/有字幕/无字幕/已有目标字幕
     filter_map = {
@@ -293,6 +303,39 @@ def _add_tasks_for_selected_files():
     st.rerun()
 
 
+def _delete_selected_files():
+    """删除选中的文件记录（仅从数据库删除，不删除磁盘文件）"""
+    deleted_count = 0
+    failed_count = 0
+    id_to_path = st.session_state.get('_id_to_path', {})
+
+    for key, selected in list(st.session_state.items()):
+        if not (isinstance(key, str) and key.startswith('s_') and selected is True):
+            continue
+        try:
+            file_id = int(key[2:])
+        except ValueError:
+            continue
+        file_path = id_to_path.get(file_id)
+        if not file_path:
+            continue
+        try:
+            MediaDAO.delete_media_file(file_path)
+            deleted_count += 1
+            # 清除选中状态
+            st.session_state[key] = False
+        except Exception:
+            failed_count += 1
+
+    if failed_count > 0:
+        st.warning(f"已删除 {deleted_count} 条记录，{failed_count} 个失败")
+    else:
+        st.toast(f"已删除 {deleted_count} 条记录")
+
+    time.sleep(1)
+    st.rerun()
+
+
 def _filter_files_by_subtitle_status(files, filter_type: str):
     """
     根据字幕状态筛选文件
@@ -425,8 +468,8 @@ def _render_media_card(media_file):
     file_path = html.escape(media_file.file_path)
     file_size = html.escape(format_file_size(media_file.file_size))
 
-    # 布局：复选框 + 卡片 + 刷新按钮
-    c_check, c_card, c_rescan = st.columns([0.5, 19, 1.5], gap="medium", vertical_alignment="center")
+    # 布局：复选框 + 卡片 + 操作按钮（刷新 + 删除）
+    c_check, c_card, c_actions = st.columns([0.5, 18, 2.5], gap="medium", vertical_alignment="center")
 
     with c_check:
         key = f"s_{media_file.id}"
@@ -455,13 +498,25 @@ def _render_media_card(media_file):
             unsafe_allow_html=True
         )
 
-    with c_rescan:
-        if st.button(
-            "↻",
-            key=f"rescan_{media_file.id}",
-            help="重新扫描该文件的字幕",
-            use_container_width=True
-        ):
-            rescan_video_subtitles(media_file.file_path)
-            st.toast(f"已刷新: {media_file.file_name}")
-            st.rerun()
+    with c_actions:
+        col_rescan, col_del = st.columns(2)
+        with col_rescan:
+            if st.button(
+                "↻",
+                key=f"rescan_{media_file.id}",
+                help="重新扫描该文件的字幕",
+                use_container_width=True
+            ):
+                rescan_video_subtitles(media_file.file_path)
+                st.toast(f"已刷新: {media_file.file_name}")
+                st.rerun()
+        with col_del:
+            if st.button(
+                "🗑",
+                key=f"del_{media_file.id}",
+                help="从媒体库中删除此记录",
+                use_container_width=True
+            ):
+                MediaDAO.delete_media_file(media_file.file_path)
+                st.toast(f"已删除: {media_file.file_name}")
+                st.rerun()
