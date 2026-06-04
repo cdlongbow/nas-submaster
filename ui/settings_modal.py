@@ -14,7 +14,8 @@ from core.config import (
     LLM_PROVIDERS,
     TRANSLATION_PROMPTS,
     get_content_type_display_name,
-    get_content_type_description
+    get_content_type_description,
+    APP_VERSION
 )
 from core.models import ContentType, ISO_LANG_MAP, TARGET_LANG_OPTIONS, WHISPER_SOURCE_LANG_MAP, PromptTemplate
 from database.connection import get_db_connection
@@ -521,18 +522,10 @@ def render_settings_dialog():
     # 8. 关于
     with tab_about:
         st.subheader("NAS SubMaster 字幕管家")
-        import subprocess
-        try:
-            version = subprocess.check_output(
-                ["git", "describe", "--tags", "--always"],
-                stderr=subprocess.DEVNULL, text=True
-            ).strip()
-        except Exception:
-            version = "未知"
 
         col_info1, col_info2 = st.columns(2)
         with col_info1:
-            st.markdown(f"**版本号：** `{version}`")
+            st.markdown(f"**版本号：** `{APP_VERSION}`")
             st.markdown("**项目地址：** [GitHub](https://github.com/aexachao/nas-submaster)")
         with col_info2:
             st.markdown("**简介：** 视频字幕提取与翻译工具")

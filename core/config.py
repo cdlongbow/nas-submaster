@@ -10,6 +10,10 @@ import copy  # ✅ 新增：用于深拷贝配置字典
 from typing import Dict, Optional
 from dataclasses import dataclass, field, asdict
 
+
+# 应用版本号（每次发版手动更新）
+APP_VERSION = "v1.4.0"
+
 from core.models import (
     ContentType,
     ProviderConfig,
