@@ -130,44 +130,86 @@ TRANSLATION_PROMPTS = {
 # ============================================================================
 
 LLM_PROVIDERS = {
-    "Ollama (本地模型)": {
-        "base_url": "http://ollama:11434/v1",
-        "model": "qwen2.5:7b",
-        "help": "无需联网，使用本地算力"
-    },
     "DeepSeek (深度求索)": {
         "base_url": "https://api.deepseek.com",
-        "model": "deepseek-chat",
-        "help": "国内推荐"
+        "model": "deepseek-v4-flash",
+        "models": [
+            "deepseek-v4-flash",
+            "deepseek-v4-pro",
+            "deepseek-chat",
+            "deepseek-reasoner",
+        ],
+        "help": "国内推荐，性价比高"
     },
     "Google Gemini": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
-        "model": "gemini-1.5-flash",
+        "model": "gemini-2.5-flash",
+        "models": [
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-3-flash",
+            "gemini-3.1-pro",
+        ],
         "help": "速度极快"
     },
     "Moonshot (Kimi)": {
         "base_url": "https://api.moonshot.cn/v1",
-        "model": "moonshot-v1-8k",
+        "model": "kimi-k2.5",
+        "models": [
+            "kimi-k2.6",
+            "kimi-k2.5",
+            "kimi-k2-thinking",
+            "moonshot-v1-128k",
+            "moonshot-v1-32k",
+            "moonshot-v1-8k",
+        ],
         "help": "长文本优化"
     },
     "Aliyun (通义千问)": {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "model": "qwen-turbo",
+        "model": "qwen3.7-plus",
+        "models": [
+            "qwen3.7-max",
+            "qwen3.7-plus",
+            "qwen3.6-flash",
+        ],
         "help": "阿里官方"
     },
     "ZhipuAI (智谱GLM)": {
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "model": "glm-4-flash",
+        "model": "GLM-4.7-Flash",
+        "models": [
+            "GLM-5.1",
+            "GLM-5",
+            "GLM-4.7",
+            "GLM-4.7-Flash",
+            "GLM-4.5-Air",
+            "GLM-4-Long",
+        ],
         "help": "智谱清言"
     },
     "OpenAI (官方)": {
         "base_url": "https://api.openai.com/v1",
         "model": "gpt-4o-mini",
+        "models": [
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-4o",
+            "gpt-4o-mini",
+        ],
         "help": "需科学上网"
+    },
+    "Ollama (本地模型)": {
+        "base_url": "http://ollama:11434/v1",
+        "model": "qwen2.5:7b",
+        "models": [],
+        "help": "无需联网，使用本地算力，质量取决于本地模型"
     },
     "自定义 (Custom)": {
         "base_url": "",
         "model": "",
+        "models": [],
         "help": "手动填写"
     }
 }
@@ -194,7 +236,7 @@ class AppConfig:
     content_type: ContentType = ContentType.MOVIE
     
     # 当前使用的 LLM 提供商
-    current_provider: str = 'Ollama (本地模型)'
+    current_provider: str = 'DeepSeek (深度求索)'
     
     # 各提供商的配置
     provider_configs: Dict[str, ProviderConfig] = field(default_factory=dict)
@@ -307,7 +349,7 @@ class AppConfig:
             translation=translation,
             export=export,
             content_type=content_type,
-            current_provider=data.get('current_provider', 'Ollama (本地模型)'),
+            current_provider=data.get('current_provider', 'DeepSeek (深度求索)'),
             provider_configs=provider_configs,
             prompt_templates=prompt_templates,
             auto_scan_enabled=data.get('auto_scan_enabled', False),
@@ -360,7 +402,7 @@ class ConfigManager:
                 },
                 'export': json.loads(config_dict.get('export_formats', '{"formats": ["srt"]}')),
                 'content_type': config_dict.get('content_type', 'movie'),
-                'current_provider': config_dict.get('current_provider', 'Ollama (本地模型)'),
+                'current_provider': config_dict.get('current_provider', 'DeepSeek (深度求索)'),
                 'provider_configs': json.loads(config_dict.get('provider_configs', '{}')),
                 'prompt_templates': json.loads(config_dict.get('prompt_templates', '{}')),
                 'auto_scan_enabled': config_dict.get('auto_scan_enabled', 'false') == 'true',

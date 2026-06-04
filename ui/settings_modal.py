@@ -335,12 +335,38 @@ def render_settings_dialog():
                     model_name = st.text_input("模型名称 (手动)", value=provider_cfg.model_name, key=f"set_model_man_{provider}")
             with col_m2:
                 if st.button("刷新", key=f"set_ref_{provider}", use_container_width=True):
-                    # 触发页面重新渲染，fetch_ollama_models 会重新请求
                     st.toast("模型列表已刷新")
                     st.rerun()
             api_key = ""
         else:
-            model_name = st.text_input("模型名称", value=provider_cfg.model_name, key=f"set_model_{provider}")
+            available_models = LLM_PROVIDERS.get(provider, {}).get("models", [])
+            if available_models:
+                # 下拉选择 + 支持手动输入
+                custom_option = "其他 (自定义输入)"
+                model_options = available_models + [custom_option]
+                current_model = provider_cfg.model_name
+                if current_model and current_model in available_models:
+                    m_idx = available_models.index(current_model)
+                else:
+                    m_idx = len(available_models)  # 指向 "其他"
+                selected = st.selectbox(
+                    "选择模型",
+                    model_options,
+                    index=m_idx,
+                    key=f"set_model_sel_{provider}",
+                    help="选择预设模型或选择「其他」手动输入"
+                )
+                if selected == custom_option:
+                    model_name = st.text_input(
+                        "自定义模型名称",
+                        value=current_model if current_model and current_model not in available_models else "",
+                        key=f"set_model_custom_{provider}",
+                        placeholder="输入模型名称，如 gpt-4o"
+                    )
+                else:
+                    model_name = selected
+            else:
+                model_name = st.text_input("模型名称", value=provider_cfg.model_name, key=f"set_model_{provider}")
             api_key = st.text_input(
                 "API Key",
                 value=provider_cfg.api_key,
