@@ -5,6 +5,7 @@
 from core.config import (
     AppConfig, VAD_PRESETS, TRANSLATION_PROMPTS, LLM_PROVIDERS,
     get_content_type_display_name, get_content_type_description,
+    get_recommended_batch_size, MODEL_BATCH_SIZES, DEFAULT_BATCH_SIZE,
 )
 from core.models import (
     ContentType, ProviderConfig, WhisperConfig, PromptTemplate,
@@ -59,6 +60,41 @@ class TestLLMProviders:
             if name != "自定义 (Custom)":
                 assert cfg.get('base_url'), f"{name} 缺少 base_url"
                 assert cfg.get('model'), f"{name} 缺少 model"
+
+    def test_default_models_have_batch_size_entry(self):
+        """云端服务商的默认模型都应有推荐批处理行数（Ollama 和自定义除外）"""
+        skip = {"Ollama (本地模型)", "自定义 (Custom)"}
+        for name, cfg in LLM_PROVIDERS.items():
+            if name in skip:
+                continue
+            default_model = cfg.get('model', '')
+            if default_model:
+                assert default_model in MODEL_BATCH_SIZES, f"{name} 的默认模型 {default_model} 缺少 batch_size 配置"
+
+
+# ============================================================================
+# get_recommended_batch_size
+# ============================================================================
+
+class TestGetRecommendedBatchSize:
+    def test_known_model_returns_configured_value(self):
+        assert get_recommended_batch_size("deepseek-v4-flash") == 800
+        assert get_recommended_batch_size("gemini-2.5-flash") == 1500
+        assert get_recommended_batch_size("moonshot-v1-8k") == 100
+        assert get_recommended_batch_size("GLM-4-Long") == 1500
+
+    def test_unknown_model_returns_default(self):
+        assert get_recommended_batch_size("some-unknown-model") == DEFAULT_BATCH_SIZE
+
+    def test_empty_model_returns_default(self):
+        assert get_recommended_batch_size("") == DEFAULT_BATCH_SIZE
+
+    def test_none_model_returns_default(self):
+        assert get_recommended_batch_size(None) == DEFAULT_BATCH_SIZE
+
+    def test_all_values_positive(self):
+        for model, size in MODEL_BATCH_SIZES.items():
+            assert size > 0, f"{model} batch_size 应为正数"
 
 
 # ============================================================================
