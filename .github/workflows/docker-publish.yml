@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v6
@@ -36,7 +36,7 @@ jobs:
     needs: test  # 单测不过不构建镜像
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # 1. 设置 QEMU (用于支持多架构构建，比如同时支持 x86 和 arm64)
       # 这对 NAS 用户非常重要，因为很多 NAS 是 ARM 架构的
