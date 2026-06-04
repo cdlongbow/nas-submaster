@@ -30,6 +30,12 @@ TARGET_LANG_CODES = {'zh', 'chs', 'cht', 'en', 'eng'}
 def render_media_library_page(debug_mode: bool = False):
     """渲染媒体库页面"""
 
+    # 计算当前已选中文件数（在列定义之前，供批量删除/开始按钮使用）
+    selected_count = sum(
+        1 for k, v in st.session_state.items()
+        if isinstance(k, str) and k.startswith('s_') and v is True
+    )
+
     # 顶部工具栏
     # 比例: 筛选(2.2) | 空白(0.8) | 目录选择(3) | 扫描(0.8) | 删除(0.8) | 开始(0.8)
     col_filter, col_spacer, col_dir, col_scan, col_del, col_start = st.columns(
@@ -165,10 +171,6 @@ def render_media_library_page(debug_mode: bool = False):
 
     # ========== 列 5: 开始按钮 ==========
     with col_start:
-        selected_count = sum(
-            1 for k, v in st.session_state.items()
-            if isinstance(k, str) and k.startswith('s_') and v is True
-        )
         btn_text = f"处理 ({selected_count})" if selected_count > 0 else "开始处理"
         if st.button(
             btn_text,
