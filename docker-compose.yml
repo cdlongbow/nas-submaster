@@ -1,6 +1,6 @@
 services:
   nas-subtitle:
-    build: .
+    image: aexachao/nas-subtitle-manager:latest
     container_name: nas-submaster
     restart: unless-stopped
     ports:

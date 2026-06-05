@@ -21,6 +21,7 @@ from core.config import (
 from core.models import ContentType, ISO_LANG_MAP, TARGET_LANG_OPTIONS, WHISPER_SOURCE_LANG_MAP, PromptTemplate
 from database.connection import get_db_connection
 from services.whisper_service import is_model_downloaded, get_model_dir
+from services.updater import get_latest_release, get_all_releases, has_update, do_update, compare_versions, ReleaseInfo
 
 
 # ============================================================================
@@ -539,13 +540,14 @@ def render_settings_dialog():
         if auto_scan:
             st.info(f"每 {interval} 分钟自动扫描一次媒体目录，新文件会自动出现在媒体库中")
 
-    # 8. 关于
+    # 8. 关于（含更新检测）
+    update_changes = {}
     with tab_about:
         st.subheader("NAS SubMaster 字幕管家")
 
         col_info1, col_info2 = st.columns(2)
         with col_info1:
-            st.markdown(f"**版本号：** `{APP_VERSION}`")
+            st.markdown(f"**当前版本：** `{APP_VERSION}`")
             st.markdown("**项目地址：** [GitHub](https://github.com/aexachao/nas-submaster)")
         with col_info2:
             st.markdown("**简介：** 视频字幕提取与翻译工具")
@@ -553,17 +555,74 @@ def render_settings_dialog():
 
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("---")
-        st.caption("基于 Faster-Whisper 语音识别 + LLM 大模型翻译，为家庭 NAS 用户打造的字幕管理工具。")
+
+        # 更新检测
+        st.subheader("检查更新")
+
+        # 检查最新版本
+        latest = get_latest_release()
+        if latest:
+            if compare_versions(APP_VERSION, latest.tag_name) < 0:
+                st.success(f"发现新版本 {latest.tag_name}")
+                st.markdown(f"**{latest.name}**")
+                if latest.body:
+                    with st.expander("更新日志", expanded=True):
+                        st.markdown(latest.body)
+                st.markdown(f"[查看 GitHub Release]({latest.html_url})")
+
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("立即更新", type="primary", use_container_width=True):
+                    with st.spinner("正在更新..."):
+                        ok, msg = do_update()
+                        if ok:
+                            st.success(msg)
+                            st.toast("更新成功，容器将自动重启")
+                        else:
+                            st.error(msg)
+            else:
+                st.info("当前已是最新版本")
+        else:
+            st.warning("无法连接到 GitHub，请检查网络")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # 自动更新开关
+        auto_update = st.toggle(
+            "启用自动更新检查",
+            value=config.auto_update_enabled,
+            help="开启后，每次打开设置时自动检查是否有新版本"
+        )
+        update_changes['auto_update_enabled'] = auto_update
+
+        # 历史版本
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("---")
+        st.subheader("历史版本")
+
+        releases = get_all_releases(limit=5)
+        if releases:
+            for r in releases:
+                is_current = r.tag_name == APP_VERSION
+                label = f"{r.tag_name}"
+                if is_current:
+                    label += " (当前)"
+                with st.expander(label):
+                    st.markdown(f"**{r.name}**")
+                    st.caption(f"发布时间: {r.published_at}")
+                    if r.body:
+                        st.markdown(r.body)
+        else:
+            st.info("无法获取版本历史")
 
     st.markdown("---")
 
     # 底部保存按钮
     if st.button("保存所有设置", type="primary", use_container_width=True):
-        _save_full_config(config_manager, whisper_changes, model_changes, trans_changes, export_changes, prompt_changes, scan_changes)
+        _save_full_config(config_manager, whisper_changes, model_changes, trans_changes, export_changes, prompt_changes, scan_changes, update_changes)
         st.rerun()
 
 
-def _save_full_config(mgr, w_changes, m_changes, t_changes, e_changes, p_changes, s_changes=None):
+def _save_full_config(mgr, w_changes, m_changes, t_changes, e_changes, p_changes, s_changes=None, u_changes=None):
     """保存逻辑"""
     config = mgr.load()
 
@@ -599,6 +658,10 @@ def _save_full_config(mgr, w_changes, m_changes, t_changes, e_changes, p_changes
     if s_changes:
         config.auto_scan_enabled = s_changes.get('auto_scan_enabled', False)
         config.auto_scan_interval_minutes = s_changes.get('auto_scan_interval_minutes', 30)
+
+    # Auto Update
+    if u_changes:
+        config.auto_update_enabled = u_changes.get('auto_update_enabled', False)
 
     # Save
     if mgr.save(config):

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, asdict
 
 
 # 应用版本号（每次发版手动更新）
-APP_VERSION = "v1.6.0"
+APP_VERSION = "v1.7.0"
 
 from core.models import (
     ContentType,
@@ -301,6 +301,9 @@ class AppConfig:
     auto_scan_enabled: bool = True
     auto_scan_interval_minutes: int = 30
 
+    # 自动更新配置
+    auto_update_enabled: bool = False
+
     def get_vad_parameters(self) -> VADParameters:
         """获取当前内容类型的 VAD 参数"""
         return VAD_PRESETS.get(self.content_type, VAD_PRESETS[ContentType.MOVIE])
@@ -355,7 +358,8 @@ class AppConfig:
                 k.value: v.to_dict() for k, v in self.prompt_templates.items()
             },
             'auto_scan_enabled': self.auto_scan_enabled,
-            'auto_scan_interval_minutes': self.auto_scan_interval_minutes
+            'auto_scan_interval_minutes': self.auto_scan_interval_minutes,
+            'auto_update_enabled': self.auto_update_enabled
         }
     
     @classmethod
@@ -406,7 +410,8 @@ class AppConfig:
             provider_configs=provider_configs,
             prompt_templates=prompt_templates,
             auto_scan_enabled=data.get('auto_scan_enabled', True),
-            auto_scan_interval_minutes=data.get('auto_scan_interval_minutes', 30)
+            auto_scan_interval_minutes=data.get('auto_scan_interval_minutes', 30),
+            auto_update_enabled=data.get('auto_update_enabled', False)
         )
 
 
@@ -459,7 +464,8 @@ class ConfigManager:
                 'provider_configs': json.loads(config_dict.get('provider_configs', '{}')),
                 'prompt_templates': json.loads(config_dict.get('prompt_templates', '{}')),
                 'auto_scan_enabled': config_dict.get('auto_scan_enabled', 'true') == 'true',
-                'auto_scan_interval_minutes': int(config_dict.get('auto_scan_interval_minutes', 30))
+                'auto_scan_interval_minutes': int(config_dict.get('auto_scan_interval_minutes', 30)),
+                'auto_update_enabled': config_dict.get('auto_update_enabled', 'false') == 'true'
             }
             
             # ✅ 修改：加载完成后更新缓存
@@ -507,7 +513,8 @@ class ConfigManager:
                     ensure_ascii=False
                 ),
                 'auto_scan_enabled': 'true' if config.auto_scan_enabled else 'false',
-                'auto_scan_interval_minutes': str(config.auto_scan_interval_minutes)
+                'auto_scan_interval_minutes': str(config.auto_scan_interval_minutes),
+                'auto_update_enabled': 'true' if config.auto_update_enabled else 'false'
             }
             
             for key, value in flat_config.items():

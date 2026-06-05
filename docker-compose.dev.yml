@@ -1,0 +1,3 @@
+services:
+  nas-subtitle:
+    build: .

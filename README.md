@@ -56,6 +56,7 @@ NAS SubMaster (NAS 字幕管家)
 |---|---|
 | `docker-compose.yml` | **唯一必选**，包含 `nas-subtitle` 服务 |
 | `docker-compose.ollama.yml` | 可选叠加，添加本地 Ollama 翻译服务 |
+| `docker-compose.dev.yml` | 开发用，叠加后从本地 Dockerfile 构建 |
 
 ### 方案一：使用 Docker Hub 镜像 (推荐)
 
@@ -80,21 +81,26 @@ docker compose -f docker-compose.yml -f docker-compose.ollama.yml up -d
 
 在 Web 设置界面选 "Ollama (本地模型)"，base_url 填 `http://ollama:11434/v1`，模型名填 `qwen2.5:7b`（或你 pull 过的任意模型）。
 
+**更新镜像**：
+```bash
+docker compose pull && docker compose up -d
+```
+
 ---
 
-### 方案二：本地源码构建
+### 方案二：本地源码构建（开发者）
 
 如果您需要二次开发，请参考最新的模块化目录结构。
 
 1.  **克隆项目**：
     ```bash
-    git clone [https://github.com/aexachao/nas-subtitle-manager.git](https://github.com/aexachao/nas-subtitle-manager.git)
-    cd nas-subtitle-manager
+    git clone https://github.com/aexachao/nas-submaster.git
+    cd nas-submaster
     ```
 
 2.  **构建并启动**：
     ```bash
-    docker compose up -d --build
+    docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
     ```
 
 ---
