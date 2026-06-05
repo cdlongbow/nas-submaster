@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.models import VADParameters, WhisperConfig
-from services.whisper_service import WhisperService
+from services.whisper_service import WhisperService, is_model_downloaded, get_model_dir
 
 
 # ---------------------------------------------------------------------------
@@ -197,3 +197,46 @@ def test_load_model_is_idempotent(make_service, mocker, monkeypatch):
 
     assert mock_class.call_count == 1
     assert service.model is mock_model
+
+
+# ---------------------------------------------------------------------------
+# is_model_downloaded / get_model_dir
+# ---------------------------------------------------------------------------
+
+class TestIsModelDownloaded:
+    def test_downloaded_model_returns_true(self, tmp_path):
+        """已下载的模型应返回 True"""
+        model_dir = tmp_path / "models"
+        cache = model_dir / "models--Systran--faster-whisper-tiny" / "snapshots" / "abc123"
+        cache.mkdir(parents=True)
+        (cache / "model.bin").write_text("fake")
+        assert is_model_downloaded("tiny", str(model_dir)) is True
+
+    def test_not_downloaded_model_returns_false(self, tmp_path):
+        """未下载的模型应返回 False"""
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        assert is_model_downloaded("small", str(model_dir)) is False
+
+    def test_empty_snapshots_dir_returns_false(self, tmp_path):
+        """snapshots 目录存在但为空时应返回 False"""
+        model_dir = tmp_path / "models"
+        cache = model_dir / "models--Systran--faster-whisper-medium" / "snapshots"
+        cache.mkdir(parents=True)
+        assert is_model_downloaded("medium", str(model_dir)) is False
+
+    def test_nonexistent_model_dir_returns_false(self):
+        """不存在的目录应返回 False"""
+        assert is_model_downloaded("tiny", "/nonexistent/path") is False
+
+
+class TestGetModelDir:
+    def test_returns_docker_path_if_exists(self, monkeypatch, tmp_path):
+        """Docker 路径存在时应返回 /data/models"""
+        monkeypatch.setattr("os.path.isdir", lambda p: p == "/data/models")
+        assert get_model_dir() == "/data/models"
+
+    def test_falls_back_to_local_path(self, monkeypatch):
+        """Docker 路径不存在时应返回 ./data/models"""
+        monkeypatch.setattr("os.path.isdir", lambda p: False)
+        assert get_model_dir() == "./data/models"

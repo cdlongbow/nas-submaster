@@ -20,6 +20,7 @@ from core.config import (
 )
 from core.models import ContentType, ISO_LANG_MAP, TARGET_LANG_OPTIONS, WHISPER_SOURCE_LANG_MAP, PromptTemplate
 from database.connection import get_db_connection
+from services.whisper_service import is_model_downloaded, get_model_dir
 
 
 # ============================================================================
@@ -126,15 +127,23 @@ def render_settings_dialog():
     # 1. Whisper 设置 (硬件/模型)
     with tab_whisper:
         st.subheader("模型与硬件")
-        
+
         col_w1, col_w2 = st.columns(2)
         with col_w1:
-            # 模型大小
+            # 模型大小（带下载状态标注）
             model_sizes = ["tiny", "base", "small", "medium", "large-v3"]
+            m_dir = get_model_dir()
+            model_status = {s: is_model_downloaded(s, m_dir) for s in model_sizes}
+
+            def _format_model(size: str) -> str:
+                return f"{size}" if model_status[size] else f"{size}  (未下载)"
+
             model_size = st.selectbox(
                 "Whisper 模型",
                 model_sizes,
-                index=model_sizes.index(config.whisper.model_size)
+                index=model_sizes.index(config.whisper.model_size),
+                format_func=_format_model,
+                help="未下载的模型将在首次使用时自动下载"
             )
             whisper_changes['whisper_model'] = model_size
             

@@ -18,6 +18,48 @@ from utils.format_utils import format_timestamp, format_file_size
 # CUDA/cuBLAS 相关错误的特征子串，用于判断是否需要回退到 CPU
 _CUDA_ERROR_MARKERS = ("libcublas", "cuda", "cudnn")
 
+# Whisper 模型大小 → HuggingFace 仓库名映射
+_MODEL_REPO_MAP = {
+    "tiny": "Systran/faster-whisper-tiny",
+    "base": "Systran/faster-whisper-base",
+    "small": "Systran/faster-whisper-small",
+    "medium": "Systran/faster-whisper-medium",
+    "large-v3": "Systran/faster-whisper-large-v3",
+}
+
+
+def get_model_dir() -> str:
+    """获取模型存储目录（Docker 用 /data/models，本地开发用 ./data/models）"""
+    docker_path = "/data/models"
+    if os.path.isdir(docker_path):
+        return docker_path
+    return "./data/models"
+
+
+def is_model_downloaded(model_size: str, model_dir: str = None) -> bool:
+    """
+    检查指定 Whisper 模型是否已下载到本地。
+
+    通过检查 HF 缓存目录结构判断：
+    {model_dir}/models--Systran--faster-whisper-{size}/snapshots/ 下有文件即为已下载。
+
+    Args:
+        model_size: 模型大小，如 "tiny", "base", "small", "medium", "large-v3"
+        model_dir: 模型目录，默认自动检测
+    Returns:
+        True 表示已下载
+    """
+    if model_dir is None:
+        model_dir = get_model_dir()
+    repo_name = f"models--Systran--faster-whisper-{model_size}"
+    snapshots = Path(model_dir) / repo_name / "snapshots"
+    if not snapshots.is_dir():
+        return False
+    for commit_dir in snapshots.iterdir():
+        if commit_dir.is_dir() and any(commit_dir.iterdir()):
+            return True
+    return False
+
 
 class WhisperService:
     """Whisper 字幕提取服务"""
