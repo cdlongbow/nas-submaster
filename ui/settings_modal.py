@@ -463,6 +463,16 @@ def render_settings_dialog():
         )
         trans_changes['max_lines_per_batch'] = batch_size
 
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        timeout = st.number_input(
+            "API 超时时间 (秒)",
+            min_value=30, max_value=1800, step=30,
+            value=config.translation.timeout,
+            help="单次 API 请求的最大等待时间，本地模型建议 600 秒以上"
+        )
+        trans_changes['timeout'] = timeout
+
     # 6. 字幕格式
     with tab_export:
         st.subheader("导出格式选择")
@@ -649,6 +659,7 @@ def _save_full_config(mgr, w_changes, m_changes, t_changes, e_changes, p_changes
     config.translation.target_language = t_changes['target_language']
     config.translation.use_embedded_subtitle = t_changes.get('use_embedded_subtitle', True)
     config.translation.max_lines_per_batch = t_changes['max_lines_per_batch']
+    config.translation.timeout = t_changes.get('timeout', 600)
 
     # Export
     config.export.formats = e_changes['export_formats']

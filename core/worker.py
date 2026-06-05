@@ -428,7 +428,8 @@ class TaskWorker:
                 model_name=provider_cfg.model_name,
                 target_language=config.translation.target_language,
                 source_language=config.whisper.source_language,
-                max_lines_per_batch=config.translation.max_lines_per_batch
+                max_lines_per_batch=config.translation.max_lines_per_batch,
+                timeout=config.translation.timeout
             )
 
             # 获取当前内容类型对应的提示词模板

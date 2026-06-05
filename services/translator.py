@@ -29,7 +29,7 @@ class TranslationConfig:
     source_language: str = 'auto'
     max_lines_per_batch: int = 500  # 每批最多翻译多少行
     max_retries: int = 3
-    timeout: int = 180
+    timeout: int = 600
 
 
 class TranslationError(Exception):
@@ -393,8 +393,8 @@ Now output the COMPLETE JSON array (no extra text, no abbreviations):"""
                 translated = self._translate_batch(entries)
                 self._update_progress(total_lines, total_lines, "翻译完成！")
                 return translated
-            except Exception as e:
-                raise TranslationError(f"翻译失败: {e}")
+            except Exception:
+                raise
         
         # 长视频：分批翻译（保留上下文）
         translated_entries = []
@@ -526,6 +526,6 @@ def translate_srt_file(
         return True, f"翻译完成，已保存到: {output_path}"
 
     except TranslationError as e:
-        return False, f"翻译失败: {e}"
+        return False, str(e)
     except Exception as e:
         return False, f"未知错误: {e}"

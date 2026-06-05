@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, asdict
 
 
 # 应用版本号（每次发版手动更新）
-APP_VERSION = "v1.7.0"
+APP_VERSION = "v1.7.1"
 
 from core.models import (
     ContentType,
@@ -456,7 +456,8 @@ class ConfigManager:
                 'translation': {
                     'enabled': config_dict.get('enable_translation', 'false') == 'true',
                     'target_language': config_dict.get('target_language', 'zh'),
-                    'max_lines_per_batch': int(config_dict.get('max_lines_per_batch', 500))
+                    'max_lines_per_batch': int(config_dict.get('max_lines_per_batch', 500)),
+                    'timeout': int(config_dict.get('timeout', 600))
                 },
                 'export': json.loads(config_dict.get('export_formats', '{"formats": ["srt"]}')),
                 'content_type': config_dict.get('content_type', 'movie'),
@@ -501,6 +502,7 @@ class ConfigManager:
                 'enable_translation': 'true' if config.translation.enabled else 'false',
                 'target_language': config.translation.target_language,
                 'max_lines_per_batch': str(config.translation.max_lines_per_batch),
+                'timeout': str(config.translation.timeout),
                 'export_formats': json.dumps(config.export.to_dict(), ensure_ascii=False),
                 'content_type': config.content_type.value if isinstance(config.content_type, ContentType) else config.content_type,
                 'current_provider': config.current_provider,

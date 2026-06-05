@@ -187,7 +187,7 @@ class TranslationConfig:
     use_embedded_subtitle: bool = True  # 优先使用内置字幕（如果有）
     max_lines_per_batch: int = 500
     max_retries: int = 3
-    timeout: int = 180
+    timeout: int = 600
 
     def to_dict(self) -> Dict:
         return {

@@ -88,8 +88,8 @@ class TestClientTimeout:
         assert call_kwargs["timeout"] == 120
 
     @patch("services.translator.OpenAI")
-    def test_default_timeout_is_180(self, mock_openai):
-        """默认超时应为 180 秒"""
+    def test_default_timeout_is_600(self, mock_openai):
+        """默认超时应为 600 秒"""
         config = TranslationConfig(
             api_key="sk-test",
             base_url="https://api.example.com/v1",
@@ -99,4 +99,4 @@ class TestClientTimeout:
         SubtitleTranslator(config)
 
         call_kwargs = mock_openai.call_args[1]
-        assert call_kwargs["timeout"] == 180
+        assert call_kwargs["timeout"] == 600
