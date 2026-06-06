@@ -32,11 +32,14 @@ def vad_params() -> VADParameters:
 
 @pytest.fixture
 def cached_model_dir(tmp_path) -> str:
-    """创建一个看起来已缓存的模型目录，避免 load_model 启动下载轮询线程。"""
+    """创建一个看起来已缓存的模型目录（通过完整性检测），避免 load_model 启动下载轮询线程。"""
     model_dir = tmp_path / "models"
-    cache_subdir = model_dir / "models--Systran--faster-whisper-tiny"
-    cache_subdir.mkdir(parents=True)
-    (cache_subdir / "marker.txt").write_text("fake model file for test")
+    # 新版 _is_model_cached 检查 snapshots/<commit>/ 结构
+    snapshot_dir = model_dir / "models--Systran--faster-whisper-tiny" / "snapshots" / "abc123"
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / "config.json").write_text("{}")
+    (snapshot_dir / "model.bin").write_text("fake model weights")
+    (snapshot_dir / "tokenizer.json").write_text("{}")
     return str(model_dir)
 
 
@@ -63,6 +66,9 @@ def test_auto_falls_back_to_cpu_on_libcublas_error(
     """device='auto' 时遇到 libcublas 错误应自动回退到 CPU。"""
     monkeypatch.delenv("WHISPER_DEVICE", raising=False)
     service = make_service(device="auto")
+
+    # 模拟 CUDA 设备存在（否则会直接走 CPU 而不会触发回退逻辑）
+    mocker.patch.object(WhisperService, "_has_cuda_device", return_value=True)
 
     mock_model = MagicMock(name="WhisperModelInstance")
     calls: list[dict] = []
@@ -120,6 +126,9 @@ def test_auto_does_not_swallow_non_cuda_errors(
     """device='auto' 模式下，非 libcublas/CUDA 错误应直接抛出，不回退。"""
     monkeypatch.delenv("WHISPER_DEVICE", raising=False)
     service = make_service(device="auto")
+
+    # 模拟 CUDA 设备存在
+    mocker.patch.object(WhisperService, "_has_cuda_device", return_value=True)
 
     call_count = {"n": 0}
 
@@ -240,3 +249,145 @@ class TestGetModelDir:
         """Docker 路径不存在时应返回 ./data/models"""
         monkeypatch.setattr("os.path.isdir", lambda p: False)
         assert get_model_dir() == "./data/models"
+
+
+# ---------------------------------------------------------------------------
+# CUDA 预检查
+# ---------------------------------------------------------------------------
+
+class TestHasCudaDevice:
+    def test_returns_true_when_cuda_available(self, mocker):
+        mocker.patch(
+            "ctranslate2.get_cuda_device_count", return_value=1
+        )
+        assert WhisperService._has_cuda_device() is True
+
+    def test_returns_false_when_no_cuda(self, mocker):
+        mocker.patch(
+            "ctranslate2.get_cuda_device_count", return_value=0
+        )
+        assert WhisperService._has_cuda_device() is False
+
+    def test_returns_false_on_exception(self, mocker):
+        mocker.patch(
+            "ctranslate2.get_cuda_device_count",
+            side_effect=RuntimeError("driver not loaded")
+        )
+        assert WhisperService._has_cuda_device() is False
+
+
+# ---------------------------------------------------------------------------
+# 模型完整性检测
+# ---------------------------------------------------------------------------
+
+class TestVerifyModelFiles:
+    def test_complete_model_returns_true(self, make_service):
+        """cached_model_dir fixture 提供的完整模型应通过验证"""
+        service = make_service(model_size="tiny")
+        assert service._verify_model_files() is True
+
+    def test_missing_snapshot_dir_returns_false(self, make_service, tmp_path):
+        """snapshots 目录不存在时返回 False"""
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        config = WhisperConfig(model_size="tiny", device="cpu", source_language="auto")
+        service = WhisperService(
+            config,
+            VADParameters(0.5, 250, 2000, 400),
+            model_dir=str(empty_dir),
+        )
+        assert service._verify_model_files() is False
+
+    def test_incomplete_model_returns_false(self, tmp_path):
+        """缺少关键文件时返回 False（半下载状态）"""
+        model_dir = tmp_path / "models"
+        snapshot = model_dir / "models--Systran--faster-whisper-tiny" / "snapshots" / "abc"
+        snapshot.mkdir(parents=True)
+        # 只有 config.json，缺 model.bin
+        (snapshot / "config.json").write_text("{}")
+        (snapshot / "tokenizer.json").write_text("{}")
+
+        config = WhisperConfig(model_size="tiny", device="cpu", source_language="auto")
+        service = WhisperService(
+            config,
+            VADParameters(0.5, 250, 2000, 400),
+            model_dir=str(model_dir),
+        )
+        assert service._verify_model_files() is False
+
+    def test_empty_file_returns_false(self, tmp_path):
+        """文件存在但大小为 0 时返回 False"""
+        model_dir = tmp_path / "models"
+        snapshot = model_dir / "models--Systran--faster-whisper-tiny" / "snapshots" / "abc"
+        snapshot.mkdir(parents=True)
+        (snapshot / "config.json").write_text("{}")
+        (snapshot / "model.bin").write_text("")  # 空文件
+        (snapshot / "tokenizer.json").write_text("{}")
+
+        config = WhisperConfig(model_size="tiny", device="cpu", source_language="auto")
+        service = WhisperService(
+            config,
+            VADParameters(0.5, 250, 2000, 400),
+            model_dir=str(model_dir),
+        )
+        assert service._verify_model_files() is False
+
+
+# ---------------------------------------------------------------------------
+# load_model 完整性检测触发重新下载
+# ---------------------------------------------------------------------------
+
+def test_load_model_triggers_redownload_on_incomplete_files(
+    make_service, mocker, monkeypatch
+):
+    """模型目录存在但文件不完整时，应触发重新下载（is_cached=False）"""
+    monkeypatch.delenv("WHISPER_DEVICE", raising=False)
+    # make_service 用的是 cached_model_dir（完整），手动构造一个不完整的
+    from pathlib import Path
+    incomplete_dir = make_service.__self__ if False else None  # noqa
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        model_dir = Path(tmp) / "models"
+        # snapshots 存在但没有关键文件
+        snapshot = model_dir / "models--Systran--faster-whisper-tiny" / "snapshots" / "abc"
+        snapshot.mkdir(parents=True)
+        (snapshot / "config.json").write_text("{}")
+        # 缺 model.bin 和 tokenizer.json
+
+        config = WhisperConfig(model_size="tiny", device="cpu", source_language="auto")
+        service = WhisperService(
+            config,
+            VADParameters(0.5, 250, 2000, 400),
+            model_dir=str(model_dir),
+        )
+        # 完整性检测应判定为不完整
+        assert service._is_model_cached() is True
+        assert service._verify_model_files() is False
+
+
+def test_load_model_no_cuda_skips_cuda_attempt(
+    make_service, mocker, monkeypatch
+):
+    """容器内没有 CUDA 设备时，device='auto' 应直接走 CPU，不调用 cuda"""
+    monkeypatch.delenv("WHISPER_DEVICE", raising=False)
+    service = make_service(device="auto")
+
+    # 模拟没有 CUDA 设备
+    mocker.patch.object(WhisperService, "_has_cuda_device", return_value=False)
+
+    mock_model = MagicMock(name="WhisperModelInstance")
+    calls: list[dict] = []
+
+    def side_effect(*args, **kwargs):
+        calls.append(kwargs)
+        return mock_model
+
+    mocker.patch(
+        "services.whisper_service.WhisperModel", side_effect=side_effect
+    )
+
+    service.load_model()
+
+    # 只调用了一次（直接 cpu），没尝试 cuda
+    assert len(calls) == 1
+    assert calls[0]["device"] == "cpu"

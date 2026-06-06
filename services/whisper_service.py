@@ -84,12 +84,31 @@ class WhisperService:
         self.model: Optional[WhisperModel] = None
     
     def _is_model_cached(self) -> bool:
-        """检查模型文件是否已在本地缓存"""
+        """检查模型文件是否已完整下载到本地缓存"""
         model_dir = Path(self.model_dir)
-        # faster-whisper 在 download_root 下以模型名创建子目录
-        # 目录存在且非空则视为已缓存
-        for candidate in model_dir.glob(f"*{self.config.model_size}*"):
-            if candidate.is_dir() and any(candidate.iterdir()):
+        repo_name = f"models--Systran--faster-whisper-{self.config.model_size}"
+        snapshots = model_dir / repo_name / "snapshots"
+        if not snapshots.is_dir():
+            return False
+        # snapshots 下至少有一个 commit 目录，且该目录非空
+        for commit_dir in snapshots.iterdir():
+            if commit_dir.is_dir() and any(commit_dir.iterdir()):
+                return True
+        return False
+
+    def _verify_model_files(self) -> bool:
+        """验证模型关键文件是否完整（检测半下载状态）"""
+        required_files = ["config.json", "model.bin", "tokenizer.json"]
+        model_dir = Path(self.model_dir)
+        repo_name = f"models--Systran--faster-whisper-{self.config.model_size}"
+        snapshots = model_dir / repo_name / "snapshots"
+        if not snapshots.is_dir():
+            return False
+        for commit_dir in snapshots.iterdir():
+            if not commit_dir.is_dir():
+                continue
+            if all((commit_dir / f).exists() and (commit_dir / f).stat().st_size > 0
+                   for f in required_files):
                 return True
         return False
 
@@ -99,6 +118,15 @@ class WhisperService:
         if env_device and env_device.strip():
             return env_device.strip()
         return self.config.device
+
+    @staticmethod
+    def _has_cuda_device() -> bool:
+        """检查容器内是否真的能识别到 CUDA 设备"""
+        try:
+            import ctranslate2
+            return ctranslate2.get_cuda_device_count() > 0
+        except Exception:
+            return False
 
     @staticmethod
     def _is_cuda_error(exc: Exception) -> bool:
@@ -114,9 +142,11 @@ class WhisperService:
         加载 Whisper 模型
 
         行为：
-        - device="auto"：先尝试 cuda，CUDA/cuBLAS 不可用时回退到 cpu
+        - device="auto"：先预检查 CUDA 可用性，没有则直接用 CPU；
+                        有则先尝试 cuda，失败回退 cpu
         - device="cuda" / "cpu"：显式指定，不静默回退，错误原样抛出
         - WHISPER_DEVICE 环境变量覆盖 config.whisper.device
+        - 模型未下载或文件不完整时显示下载进度
 
         Args:
             progress_callback: 进度回调 (current, total, message)，用于在下载时上报进度
@@ -124,7 +154,15 @@ class WhisperService:
         if self.model is not None:
             return
 
-        is_cached = self._is_model_cached()
+        # 完整性检测：发现半下载状态时视为未缓存，触发重新下载
+        if self._is_model_cached() and not self._verify_model_files():
+            print(
+                f"[WhisperService] 模型文件不完整，将重新下载: "
+                f"{self.config.model_size}"
+            )
+            is_cached = False
+        else:
+            is_cached = self._is_model_cached()
 
         if not is_cached and progress_callback:
             progress_callback(5, 100, f"首次使用，正在下载模型 {self.config.model_size}...")
@@ -169,25 +207,36 @@ class WhisperService:
 
         try:
             if device == "auto":
-                # auto：先尝试 cuda，失败（CUDA/cuBLAS 不可用）回退到 cpu
-                try:
-                    self.model = _do_load("cuda", compute_type)
+                # auto：先预检查 CUDA 可用性，没有则直接走 CPU
+                if not self._has_cuda_device():
+                    print(
+                        f"[WhisperService] 容器内未检测到 CUDA 设备，直接使用 CPU"
+                    )
+                    self.model = _do_load("cpu", compute_type)
                     print(
                         f"[WhisperService] Model loaded: "
-                        f"{self.config.model_size} (device=cuda)"
+                        f"{self.config.model_size} (device=cpu)"
                     )
-                except Exception as e:
-                    if self._is_cuda_error(e):
-                        print(
-                            f"[WhisperService] CUDA 不可用 ({e})，回退到 CPU"
-                        )
-                        self.model = _do_load("cpu", compute_type)
+                else:
+                    # 有 CUDA：先尝试 cuda，失败（CUDA/cuBLAS 不可用）回退 cpu
+                    try:
+                        self.model = _do_load("cuda", compute_type)
                         print(
                             f"[WhisperService] Model loaded: "
-                            f"{self.config.model_size} (device=cpu)"
+                            f"{self.config.model_size} (device=cuda)"
                         )
-                    else:
-                        raise
+                    except Exception as e:
+                        if self._is_cuda_error(e):
+                            print(
+                                f"[WhisperService] CUDA 不可用 ({e})，回退到 CPU"
+                            )
+                            self.model = _do_load("cpu", compute_type)
+                            print(
+                                f"[WhisperService] Model loaded: "
+                                f"{self.config.model_size} (device=cpu)"
+                            )
+                        else:
+                            raise
             else:
                 # 显式 cuda / cpu：不静默回退，错误原样向上抛
                 self.model = _do_load(device, compute_type)
@@ -198,7 +247,7 @@ class WhisperService:
         finally:
             if stop_event:
                 stop_event.set()
-    
+
     def extract_subtitle(
         self,
         video_path: str,
