@@ -41,11 +41,14 @@ def _render_task_list():
         st.info("队列为空")
         return
 
-    for task in tasks:
-        _render_task_card(task)
+    # 用 enumerate 提供稳定的位置索引，作为 widget key 前缀
+    # 避免 fragment 在多次 run_every 之间的 list 顺序变化时，
+    # 旧 widget 残留与新 widget 同 key 冲突（StreamlitDuplicateElementKey）
+    for idx, task in enumerate(tasks):
+        _render_task_card(task, idx)
 
 
-def _render_task_card(task):
+def _render_task_card(task, idx: int):
     """渲染单个任务卡片"""
 
     # 状态映射
@@ -82,6 +85,10 @@ def _render_task_card(task):
             st.code(task.log_history, language=None)
 
     # 操作按钮（使用独立的列）
+    # 关键：每个分支的 widget key 必须完全唯一
+    #  - 用 idx 前缀应对 list 顺序变化（fragment run_every 跨 tick）
+    #  - 在 key 里嵌入 status 名，避免同一 task 状态切换时跨分支 key 冲突
+    #    （fragment 内部不同分支若共用 'del_{id}'，旧 widget 残留会冲突）
     col_space, col_ops = st.columns([8, 2])
 
     with col_ops:
@@ -89,29 +96,29 @@ def _render_task_card(task):
             # 失败任务：重试 + 删除
             subcol1, subcol2 = st.columns(2)
             with subcol1:
-                if st.button("重试", key=f"retry_{task.id}", use_container_width=True):
+                if st.button("重试", key=f"t{idx}_{task.id}_failed_retry", use_container_width=True):
                     TaskDAO.reset_task(task.id)
                     st.rerun()
             with subcol2:
-                if st.button("删除", key=f"del_{task.id}", use_container_width=True):
+                if st.button("删除", key=f"t{idx}_{task.id}_failed_del", use_container_width=True):
                     TaskDAO.delete_task(task.id)
                     st.rerun()
         elif task.status == TaskStatus.PROCESSING:
             # 处理中：取消 + 删除
             subcol1, subcol2 = st.columns(2)
             with subcol1:
-                if st.button("取消", key=f"cancel_{task.id}", use_container_width=True):
+                if st.button("取消", key=f"t{idx}_{task.id}_proc_cancel", use_container_width=True):
                     TaskDAO.cancel_task(task.id)
                     worker = get_worker()
                     if worker:
                         worker.request_cancel()
                     st.rerun()
             with subcol2:
-                if st.button("删除", key=f"del_{task.id}", use_container_width=True):
+                if st.button("删除", key=f"t{idx}_{task.id}_proc_del", use_container_width=True):
                     TaskDAO.delete_task(task.id)
                     st.rerun()
         else:
             # 其他状态（等待中、已取消、已完成）：仅删除
-            if st.button("删除", key=f"del_{task.id}", use_container_width=True):
+            if st.button("删除", key=f"t{idx}_{task.id}_{task.status.value}_del", use_container_width=True):
                 TaskDAO.delete_task(task.id)
                 st.rerun()

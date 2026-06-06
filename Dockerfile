@@ -47,9 +47,17 @@ EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8501/_stcore/health || exit 1
 
-# 启动命令
-CMD ["streamlit", "run", "app.py", \
-     "--server.port=8501", \
-     "--server.address=0.0.0.0", \
-     "--server.headless=true", \
-     "--server.runOnSave=false"]
+# 启动命令：先预下载 Whisper 模型（若 WHISPER_PRELOAD_MODELS 设置），再启动 Streamlit
+# 预下载可在首次启动时完成模型拉取，避免在 worker 处理任务时下载卡 UI
+CMD ["sh", "-c", "\
+    if [ -n \"$$WHISPER_PRELOAD_MODELS\" ]; then \
+        echo \"[Entrypoint] Pre-downloading Whisper models: $$WHISPER_PRELOAD_MODELS\"; \
+        python3 scripts/download_whisper_model.py $$WHISPER_PRELOAD_MODELS || \
+            echo \"[Entrypoint] WARN: 模型预下载失败，将在运行时重试\"; \
+    fi && \
+    exec streamlit run app.py \
+        --server.port=8501 \
+        --server.address=0.0.0.0 \
+        --server.headless=true \
+        --server.runOnSave=false \
+"]

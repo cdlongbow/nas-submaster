@@ -7,6 +7,7 @@ Whisper 字幕提取服务
 
 import os
 import threading
+import warnings
 from pathlib import Path
 from typing import Optional, Callable
 from faster_whisper import WhisperModel
@@ -26,6 +27,43 @@ _MODEL_REPO_MAP = {
     "medium": "Systran/faster-whisper-medium",
     "large-v3": "Systran/faster-whisper-large-v3",
 }
+
+
+def _check_hf_endpoint_compat() -> None:
+    """
+    检测并警告 HF_ENDPOINT 与 huggingface_hub 不兼容的常见配置。
+
+    历史背景：
+      huggingface_hub >= 1.18 的 _httpx_follow_relative_redirects_with_backoff
+      不再 follow 跨域 308 重定向，而 hf-mirror.com 正是用 308 → 307 → huggingface.co
+      链路工作。设 HF_ENDPOINT=https://hf-mirror.com 时，HEAD 请求拿到 308 响应后
+      因无 x-repo-commit header 而抛 FileMetadataError，表现为：
+        "An error happened while trying to locate the file on the Hub..."
+
+    建议：直连 huggingface.co，不要设 HF_ENDPOINT。
+    """
+    hf_endpoint = os.environ.get("HF_ENDPOINT", "").strip().rstrip("/")
+    if not hf_endpoint:
+        return  # 未设置，无需处理
+
+    # 已知不兼容的镜像源
+    bad_endpoints = ("hf-mirror.com",)
+    if any(bad in hf_endpoint for bad in bad_endpoints):
+        warnings.warn(
+            f"[WhisperService] 检测到 HF_ENDPOINT={hf_endpoint!r}，"
+            f"该镜像源与 huggingface_hub >= 1.18 不兼容（不 follow 跨域 308 重定向），"
+            f"会导致 'locate the file on the Hub' 错误。"
+            f"建议清空 HF_ENDPOINT 环境变量后重试。",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        print(
+            f"[WhisperService] ⚠️  HF_ENDPOINT={hf_endpoint} 与新版 huggingface_hub 不兼容，"
+            f"将尝试自动 unset 后再下载"
+        )
+        # 自动清除，避免触发已知 bug
+        os.environ.pop("HF_ENDPOINT", None)
+        os.environ.pop("hf_endpoint", None)
 
 
 def get_model_dir() -> str:
@@ -153,6 +191,10 @@ class WhisperService:
         """
         if self.model is not None:
             return
+
+        # 在加载前检查 HF_ENDPOINT 与新版 huggingface_hub 的兼容性
+        # 若发现 hf-mirror.com 等不兼容源，自动清除并警告
+        _check_hf_endpoint_compat()
 
         # 完整性检测：发现半下载状态时视为未缓存，触发重新下载
         if self._is_model_cached() and not self._verify_model_files():

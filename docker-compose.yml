@@ -12,7 +12,11 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - PYTHONUNBUFFERED=1
-      - HF_ENDPOINT=https://hf-mirror.com
+      # 首次启动时预下载的 Whisper 模型（逗号分隔，如 "base" 或 "base,medium"）
+      # 设为空字符串则跳过预下载，由运行时的 worker 触发下载
+      # 注意：不要设 HF_ENDPOINT=hf-mirror.com，否则 huggingface_hub 1.18+ 会
+      # 因不 follow 跨域 308 重定向而报 "Hub" 错误。直连 huggingface.co 即可。
+      - WHISPER_PRELOAD_MODELS=base
       # Whisper 设备：auto = 优先 GPU，CUDA 不可用时回退 CPU；也可填 cpu / cuda
       - WHISPER_DEVICE=auto
     shm_size: 4gb
