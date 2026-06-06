@@ -12,17 +12,33 @@
 1. APP_VERSION 是字符串
 2. 格式是 v<数字>.<数字>.<数字>(+可选后缀)
 3. 跟最近一次 commit message 里出现的 vX.Y.Z 不冲突
+4. CI 的 grep 模式能正常提取
 
 第 3 点是核心：每次 release 时，code 常量必须跟 commit message
 对齐。
+
+注意：所有路径都用 pathlib.Path(__file__) 推导，绝不硬编码绝对路径！
+（CI 容器在 /home/runner/work/.../,本地在 /home/dev/nas-submaster/,
+ 任何硬编码都会让 CI 失败——之前 37b78e7 commit 踩过这个坑。）
 """
 
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from core.config import APP_VERSION
+
+
+# ---------------------------------------------------------------------------
+# 路径推导：兼容本地 + CI
+# ---------------------------------------------------------------------------
+
+# tests/unit/test_app_version.py → 项目根 = 父级的父级
+TESTS_DIR = Path(__file__).parent.resolve()
+PROJECT_ROOT = TESTS_DIR.parent.parent.resolve()
+CONFIG_FILE = PROJECT_ROOT / "core" / "config.py"
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +68,11 @@ class TestAppVersionFormat:
 # ---------------------------------------------------------------------------
 
 class TestAppVersionAlignsWithCommits:
-    """APP_VERSION 跟最近 commit message 里提到的版本号要一致"""
+    """APP_VERSION 跟最近 commit message 里提到的版本号要一致
+
+    依赖 git CLI:CI runner (github-hosted ubuntu) 默认有 git,但
+    纯 Python 容器可能没装 — 用 skipif 让 fixture/测试优雅退化。
+    """
 
     @pytest.fixture
     def last_commit_message(self) -> str:
@@ -61,7 +81,7 @@ class TestAppVersionAlignsWithCommits:
             capture_output=True,
             text=True,
             check=True,
-            cwd="/home/dev/nas-submaster",
+            cwd=str(PROJECT_ROOT),
         )
         return result.stdout.strip()
 
@@ -72,9 +92,22 @@ class TestAppVersionAlignsWithCommits:
             capture_output=True,
             text=True,
             check=True,
-            cwd="/home/dev/nas-submaster",
+            cwd=str(PROJECT_ROOT),
         )
         return [line.strip() for line in result.stdout.strip().splitlines()]
+
+    @pytest.fixture(autouse=True)
+    def require_git(self):
+        """在 fixture 阶段就检查 git 是否可用,不可用就 skip 整个 class"""
+        try:
+            subprocess.run(
+                ["git", "--version"],
+                capture_output=True,
+                check=True,
+                timeout=5,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            pytest.skip("git 不可用,跳过 commit message 守卫")
 
     def test_recent_commits_have_version_in_subject(self, last_5_commits):
         """最近 5 个 commit 至少要有 1 个主题里含 v<APP_VERSION>
@@ -105,6 +138,13 @@ class TestAppVersionGrepCompatible:
     grep -oP 'APP_VERSION = "v\\K[^"]+' core/config.py
     """
 
+    def test_config_file_exists(self):
+        """路径推导后能找到 core/config.py（防止 CI 路径错）"""
+        assert CONFIG_FILE.exists(), (
+            f"找不到 {CONFIG_FILE}，路径推导可能错了。"
+            f"TESTS_DIR={TESTS_DIR}, PROJECT_ROOT={PROJECT_ROOT}"
+        )
+
     def test_grep_extracts_cleanly(self):
         """CI workflow 用这个 grep 提取版本号，必须兼容
 
@@ -113,9 +153,7 @@ class TestAppVersionGrepCompatible:
 
         Python re 不支持 \\K,所以这里用等价写法：捕获 v 后面的部分。
         """
-        import re
-        with open("/home/dev/nas-submaster/core/config.py") as f:
-            content = f.read()
+        content = CONFIG_FILE.read_text(encoding="utf-8")
         # 等价于 CI 的 grep
         m = re.search(r'APP_VERSION = "(v[^"]+)"', content)
         assert m is not None, "CI grep 模式没匹配到 APP_VERSION,workflow 会挂"
