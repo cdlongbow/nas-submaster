@@ -5,7 +5,7 @@
 从 Docker Hub 检查新版本、从 GitHub 获取更新日志、执行 Docker 更新
 """
 
-import subprocess
+import os
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -219,35 +219,120 @@ def has_update() -> bool:
     return compare_versions(APP_VERSION, latest.tag_name) < 0
 
 
+DOCKER_SOCKET = "/var/run/docker.sock"
+
+
+def _docker_api(method: str, path: str, body: dict = None, timeout: int = 300) -> tuple:
+    """
+    通过 Docker Socket 调用 Docker Engine API。
+
+    Args:
+        method: HTTP 方法（GET/POST）
+        path: API 路径（如 /images/json）
+        body: 请求体（POST 时使用）
+        timeout: 超时秒数
+    Returns:
+        (status_code, response_json_or_text)
+    """
+    import http.client
+    import json
+
+    conn = http.client.HTTPUnixConnection(DOCKER_SOCKET)
+    try:
+        headers = {"Content-Type": "application/json"}
+        payload = json.dumps(body) if body else None
+        conn.request(method, f"http://localhost{path}", body=payload, headers=headers)
+        resp = conn.getresponse()
+        data = resp.read().decode("utf-8", errors="replace")
+        try:
+            return resp.status, json.loads(data)
+        except json.JSONDecodeError:
+            return resp.status, data
+    finally:
+        conn.close()
+
+
+def _get_container_info() -> Optional[dict]:
+    """获取当前容器信息（通过 hostname 即容器 ID）"""
+    import socket
+    hostname = socket.gethostname()
+    status, data = _docker_api("GET", f"/containers/{hostname}/json")
+    if status == 200:
+        return data
+    return None
+
+
 def do_update() -> tuple:
     """
-    执行 Docker 更新：pull 最新镜像并重建容器。
+    通过 Docker Engine API 执行自更新：
+    1. 拉取最新镜像
+    2. 用相同配置重建并重启当前容器
 
     Returns:
         (success: bool, message: str)
     """
     try:
-        # 拉取最新镜像
-        result = subprocess.run(
-            ["docker", "compose", "pull"],
-            capture_output=True, text=True, timeout=300,
-        )
-        if result.returncode != 0:
-            return False, f"拉取镜像失败: {result.stderr.strip()}"
+        # 检查 Docker Socket 是否可用
+        if not os.path.exists(DOCKER_SOCKET):
+            return False, (
+                "未找到 Docker Socket，请在 docker-compose.yml 中挂载：\n"
+                "volumes:\n"
+                "  - /var/run/docker.sock:/var/run/docker.sock"
+            )
 
-        # 重建并重启容器
-        result = subprocess.run(
-            ["docker", "compose", "up", "-d"],
-            capture_output=True, text=True, timeout=300,
+        # 获取当前容器信息
+        container = _get_container_info()
+        if not container:
+            return False, "无法获取当前容器信息"
+
+        # 提取镜像名和容器配置
+        image = container.get("Config", {}).get("Image", "")
+        if not image:
+            return False, "无法获取当前容器镜像名"
+
+        container_name = container.get("Name", "").lstrip("/")
+
+        # 1. 拉取最新镜像
+        status, resp = _docker_api("POST", f"/images/create?fromImage={image}&tag=latest")
+        if status not in (200, 201):
+            return False, f"拉取镜像失败: {resp}"
+
+        # 2. 停止当前容器
+        status, resp = _docker_api("POST", f"/containers/{container_name}/stop?t=30")
+        if status not in (200, 204, 304):
+            return False, f"停止容器失败: {resp}"
+
+        # 3. 删除当前容器
+        status, resp = _docker_api("DELETE", f"/containers/{container_name}?v=true")
+        if status not in (200, 204):
+            return False, f"删除旧容器失败: {resp}"
+
+        # 4. 用相同配置创建新容器
+        create_body = container.get("Config", {})
+        # 构建 HostConfig
+        host_config = container.get("HostConfig", {})
+        create_body["HostConfig"] = host_config
+
+        status, resp = _docker_api(
+            "POST",
+            f"/containers/create?name={container_name}",
+            body=create_body,
         )
-        if result.returncode != 0:
-            return False, f"重建容器失败: {result.stderr.strip()}"
+        if status not in (200, 201):
+            return False, f"创建新容器失败: {resp}"
+
+        new_container_id = resp.get("Id", "")
+        if not new_container_id:
+            return False, "创建容器未返回 ID"
+
+        # 5. 启动新容器
+        status, resp = _docker_api("POST", f"/containers/{new_container_id}/start")
+        if status not in (200, 204, 304):
+            return False, f"启动新容器失败: {resp}"
 
         return True, "更新成功，容器已重启"
 
-    except subprocess.TimeoutExpired:
-        return False, "更新超时（5分钟），请手动执行 docker compose pull && docker compose up -d"
-    except FileNotFoundError:
-        return False, "未找到 docker 命令，请确认 Docker 已安装"
+    except ConnectionRefusedError:
+        return False, "无法连接 Docker Socket，请确认已挂载 /var/run/docker.sock"
     except Exception as e:
         return False, f"更新失败: {e}"

@@ -8,6 +8,7 @@ services:
     volumes:
       - ./data:/data
       - /your/media/path:/media/movies  # 修改成你自己的媒体库地址
+      - /var/run/docker.sock:/var/run/docker.sock  # 自更新功能需要
     environment:
       - TZ=Asia/Shanghai
       - PYTHONUNBUFFERED=1
