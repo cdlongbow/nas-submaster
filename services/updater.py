@@ -6,6 +6,7 @@
 """
 
 import os
+import socket as _real_socket
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -242,10 +243,9 @@ def _docker_api(method: str, path: str, body: dict = None, timeout: int = 300) -
     """
     import http.client
     import json
-    import socket as _socket
 
     # 用 AF_UNIX 手动建连（兼容 Python 3.10 ~ 3.13）
-    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    sock = _real_socket.socket(_real_socket.AF_UNIX, _real_socket.SOCK_STREAM)
     sock.settimeout(timeout)
     try:
         sock.connect(DOCKER_SOCKET)
