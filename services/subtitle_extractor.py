@@ -261,10 +261,13 @@ def extract_subtitle(
     video_path: str,
     track_index: int,
     output_path: Optional[str] = None,
-    output_format: str = 'srt'
+    output_format: str = 'srt',
+    embedded: bool = False
 ) -> Optional[str]:
     """快捷函数：提取字幕"""
-    return SubtitleExtractor.extract_subtitle(video_path, track_index, output_path, output_format)
+    return SubtitleExtractor.extract_subtitle(
+        video_path, track_index, output_path, output_format, embedded
+    )
 
 
 def has_embedded_subtitles(video_path: str) -> bool:
