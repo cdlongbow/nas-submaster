@@ -127,6 +127,43 @@ class TestAppVersionAlignsWithCommits:
                 f"可能 APP_VERSION 改了但 commit message 漂移（旧版本号还残留）"
             )
 
+    def test_head_commit_message_matches_app_version(self, last_commit_message):
+        """🚨 强约束：HEAD commit 主题里必须出现 APP_VERSION 字符串
+
+        这个测试防止「commit message 写 v1.7.x 但忘了改 APP_VERSION」或
+        反过来「改了 APP_VERSION 但 commit message 漂移」——
+
+        踩坑历史：
+        - 37b78e7 (bump v1.7.6 → v1.7.7): 之前多个 commit 都用 v1.7.6 message，
+          但 APP_VERSION 没跟上，Docker Hub 上 v1.7.7 tag 跟实际代码漂移。
+        - 8d56aba (feat+fix progress): commit message 写 v1.7.7 但用户
+          反馈应该 bump v1.7.8——这是因为之前的守卫太软（没匹配就 skip
+          而不是 fail），导致漏检。
+
+        修复方案：HEAD commit 主题（前 200 字符）必须包含 APP_VERSION，
+        否则直接 fail。允许 HEAD 是 bump-only commit（即 message 里
+        APP_VERSION 出现 2+ 次：旧版号 + 新版号，或者只出现新版号）。
+        """
+        # 主题 = 第一行；取前 200 字符就够
+        subject = last_commit_message.split("\n", 1)[0][:200]
+        if APP_VERSION not in subject:
+            pytest.fail(
+                f"🚨 HEAD commit 主题必须包含 APP_VERSION={APP_VERSION!r}，\n"
+                f"实际主题: {subject!r}\n"
+                f"完整 message: {last_commit_message[:300]!r}\n"
+                f"\n"
+                f"这是为了防止两种漂移：\n"
+                f"1. commit message 写了 vX.Y.Z 但 APP_VERSION 没改 → CI 推的 tag 跟代码不一致\n"
+                f"2. APP_VERSION 改了但 commit message 漂移 → 用户看不出这是哪个版本的提交\n"
+                f"\n"
+                f"正确做法：\n"
+                f"- 改 APP_VERSION 时，commit message 必须写明新版本号\n"
+                f"- 建议 message 格式：'fix|feat|chore|...: <描述> v1.7.X'\n"
+                f"  （fix 类型可以不写，因为 fix 经常是 v1.7.x→v1.7.x+1 的常规 bump）\n"
+                f"\n"
+                f"如果这个 commit 真的不该写版本号（极少见），请用 git commit --amend 加上。"
+            )
+
 
 # ---------------------------------------------------------------------------
 # CI 提取版本号的契约（镜像 .github/workflows/docker-publish.yml）

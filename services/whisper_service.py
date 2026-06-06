@@ -28,6 +28,17 @@ _MODEL_REPO_MAP = {
     "large-v3": "Systran/faster-whisper-large-v3",
 }
 
+# Whisper 模型大小 → 完整下载字节数（从 huggingface.co/api/models/.../tree/main 拉取）
+# 用于下载进度计算（百分比 / 总大小显示）。
+# 数字是 2026-06 拉的真实大小，可能随模型版本小幅波动。
+MODEL_TOTAL_SIZE_BYTES = {
+    "tiny":     78_207_087,    #  74.6 MB
+    "base":    147_886_409,    # 141.0 MB
+    "small":   486_215_847,    # 463.7 MB
+    "medium": 1_530_575_217,   #   1.5 GB
+    "large-v3": 3_090_839_273, #   2.9 GB
+}
+
 
 def _check_hf_endpoint_compat() -> None:
     """
@@ -207,24 +218,52 @@ class WhisperService:
             is_cached = self._is_model_cached()
 
         if not is_cached and progress_callback:
-            progress_callback(5, 100, f"首次使用，正在下载模型 {self.config.model_size}...")
+            model_total_bytes = MODEL_TOTAL_SIZE_BYTES.get(
+                self.config.model_size, 0
+            )
+            # 启动消息：含总大小预期（让用户心里有数）
+            if model_total_bytes > 0:
+                initial_msg = (
+                    f"首次使用，正在下载模型 {self.config.model_size}... "
+                    f"总大小 {format_file_size(model_total_bytes)}"
+                )
+            else:
+                initial_msg = (
+                    f"首次使用，正在下载模型 {self.config.model_size}..."
+                )
+            progress_callback(0, 100, initial_msg)
+
             # 启动后台线程轮询下载目录大小，定时上报进度
             stop_event = threading.Event()
             model_dir = Path(self.model_dir)
 
             def _poll_download():
+                # 进度计算区间 [5, 49]：下载阶段占用任务 5%~49%，
+                # 留 50% 给实际字幕提取（worker 那边会 50+int(...) 算）
                 while not stop_event.is_set():
                     try:
-                        total_size = sum(
+                        current_bytes = sum(
                             f.stat().st_size
                             for f in model_dir.rglob('*')
                             if f.is_file()
                         )
-                        if total_size > 0:
+                        if model_total_bytes > 0 and current_bytes > 0:
+                            raw_pct = (current_bytes / model_total_bytes) * 100
+                            # clamp 到 [5, 99]，避免 0% 或 ≥100% 误导
+                            pct = max(5, min(99, int(raw_pct + 0.5)))
+                            progress_callback(
+                                pct, 100,
+                                f"正在下载模型 {self.config.model_size}... "
+                                f"{format_file_size(current_bytes)} / "
+                                f"{format_file_size(model_total_bytes)} "
+                                f"({pct}%)"
+                            )
+                        elif current_bytes > 0:
+                            # 兜底：未知总大小时仍显示已下载
                             progress_callback(
                                 5, 100,
                                 f"正在下载模型 {self.config.model_size}... "
-                                f"已下载 {format_file_size(total_size)}"
+                                f"已下载 {format_file_size(current_bytes)}"
                             )
                     except Exception:
                         pass
