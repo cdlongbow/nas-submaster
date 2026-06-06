@@ -231,22 +231,6 @@ class TestAppConfigSerialization:
         assert config.auto_scan_enabled is True
         assert config.auto_scan_interval_minutes == 30
 
-    def test_auto_update_default_false(self):
-        config = AppConfig()
-        assert config.auto_update_enabled is False
-
-    def test_auto_update_round_trip(self):
-        config = AppConfig(auto_update_enabled=True)
-        d = config.to_dict()
-        restored = AppConfig.from_dict(d)
-        assert restored.auto_update_enabled is True
-
-    def test_auto_update_from_dict_missing_key_defaults_false(self):
-        data = {}
-        config = AppConfig.from_dict(data)
-        assert config.auto_update_enabled is False
-
-
 # ============================================================================
 # get_content_type_display_name / description
 # ============================================================================

@@ -21,7 +21,8 @@ from core.config import (
 from core.models import ContentType, ISO_LANG_MAP, TARGET_LANG_OPTIONS, WHISPER_SOURCE_LANG_MAP, PromptTemplate
 from database.connection import get_db_connection
 from services.whisper_service import is_model_downloaded, get_model_dir
-from services.updater import get_latest_release, has_update, do_update, compare_versions
+# 2026-06-06 移除内置更新检测/自动更新 — 改用 watchtower 统一管理
+# from services.updater import get_latest_release, has_update, do_update, compare_versions
 
 
 # ============================================================================
@@ -550,71 +551,47 @@ def render_settings_dialog():
         if auto_scan:
             st.info(f"每 {interval} 分钟自动扫描一次媒体目录，新文件会自动出现在媒体库中")
 
-    # 8. 关于（含更新检测）
-    update_changes = {}
+    # 8. 关于
     with tab_about:
         st.subheader("NAS SubMaster 字幕管家")
-
-        # 当前版本 + 检查更新按钮
-        col_ver, col_btn = st.columns([3, 1], vertical_alignment="bottom")
-        with col_ver:
-            st.markdown(f"**当前版本：** `{APP_VERSION}`")
-        with col_btn:
-            if st.button("检查更新", use_container_width=True):
-                with st.spinner("正在检查..."):
-                    latest = get_latest_release()
-                    if latest and compare_versions(APP_VERSION, latest.tag_name) < 0:
-                        st.session_state._update_result = ("update", latest)
-                    elif latest:
-                        st.session_state._update_result = ("latest", None)
-                    else:
-                        st.session_state._update_result = ("error", None)
-
-        # 内联显示检查结果
-        if '_update_result' in st.session_state:
-            status, release = st.session_state._update_result
-            if status == "update" and release:
-                st.success(f"发现新版本 {release.tag_name}")
-                st.markdown(f"**{release.name}**")
-                if release.body:
-                    with st.expander("更新日志", expanded=True):
-                        st.markdown(release.body)
-                st.markdown(f"[查看 GitHub Release]({release.html_url})")
-                if st.button("立即更新", type="primary", use_container_width=True):
-                    with st.spinner("正在更新..."):
-                        ok, msg = do_update()
-                        if ok:
-                            st.success(msg)
-                        else:
-                            st.error(msg)
-            elif status == "latest":
-                st.info("当前已是最新版本")
-            else:
-                st.warning("无法连接到 GitHub，请检查网络")
-
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # 自动更新开关
-        auto_update = st.toggle(
-            "启用自动更新",
-            value=config.auto_update_enabled,
-            help="开启后，每次打开设置时自动检查是否有新版本"
-        )
-        update_changes['auto_update_enabled'] = auto_update
-
-        # 项目地址
+        st.markdown(f"**当前版本：** `{APP_VERSION}`")
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("**项目地址：** [GitHub](https://github.com/aexachao/nas-submaster)")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        with st.expander("🔄 如何更新到最新版本", expanded=False):
+            st.markdown(
+                "本应用**不内置自动更新**，请使用 [Watchtower](https://github.com/containrrr/watchtower) "
+                "在宿主机上监听 `aexachao/nas-subtitle-manager` 镜像更新：\n\n"
+                "```bash\n"
+                "# 1. 启动 watchtower（自动更新 nas-subtitle 容器）\n"
+                "docker run -d --name watchtower \\\n"
+                "  -v /var/run/docker.sock:/var/run/docker.sock \\\n"
+                "  -e WATCHTOWER_LABEL_ENABLE=true \\\n"
+                "  -e WATCHTOWER_CLEANUP=true \\\n"
+                "  -e WATCHTOWER_POLL_INTERVAL=86400 \\\n"
+                "  --restart unless-stopped \\\n"
+                "  containrrr/watchtower\n\n"
+                "# 2. 给本应用的容器加 label 启用 watchtower 监控\n"
+                "# 在 docker-compose.yml 的 nas-subtitle 服务下加：\n"
+                "#   labels:\n"
+                "#     com.centurylinklabs.watchtower.enable: \"true\"\n\n"
+                "# 3. 手动触发一次更新（可选）\n"
+                "docker exec watchtower watchtower --run-once\n"
+                "```\n\n"
+                "**优点**：Watchtower 是工业级方案,自动清理旧镜像、回滚机制成熟,"
+                "不与应用代码耦合。"
+            )
 
     st.markdown("---")
 
     # 底部保存按钮
     if st.button("保存所有设置", type="primary", use_container_width=True):
-        _save_full_config(config_manager, whisper_changes, model_changes, trans_changes, export_changes, prompt_changes, scan_changes, update_changes)
+        _save_full_config(config_manager, whisper_changes, model_changes, trans_changes, export_changes, prompt_changes, scan_changes)
         st.rerun()
 
 
-def _save_full_config(mgr, w_changes, m_changes, t_changes, e_changes, p_changes, s_changes=None, u_changes=None):
+def _save_full_config(mgr, w_changes, m_changes, t_changes, e_changes, p_changes, s_changes=None):
     """保存逻辑"""
     config = mgr.load()
 
@@ -651,10 +628,6 @@ def _save_full_config(mgr, w_changes, m_changes, t_changes, e_changes, p_changes
     if s_changes:
         config.auto_scan_enabled = s_changes.get('auto_scan_enabled', False)
         config.auto_scan_interval_minutes = s_changes.get('auto_scan_interval_minutes', 30)
-
-    # Auto Update
-    if u_changes:
-        config.auto_update_enabled = u_changes.get('auto_update_enabled', False)
 
     # Save
     if mgr.save(config):

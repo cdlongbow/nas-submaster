@@ -92,11 +92,17 @@ def is_model_downloaded(model_size: str, model_dir: str = None) -> bool:
     通过检查 HF 缓存目录结构判断：
     {model_dir}/models--Systran--faster-whisper-{size}/snapshots/ 下有文件即为已下载。
 
+    ⚠️ 2026-06-06 改进：增加完整性校验。
+    之前只检查 snapshots/ 下是否有非空目录，但半下载状态会创建空目录 +
+    .incomplete 文件，导致 _is_model_cached() 假阳性返回 True，
+    WhisperModel 加载时尝试加载半下载文件 → 卡住/报错。
+    现在的判断：必须满足"目录非空" + "所有 required_files 都存在且 size > 0"。
+
     Args:
         model_size: 模型大小，如 "tiny", "base", "small", "medium", "large-v3"
         model_dir: 模型目录，默认自动检测
     Returns:
-        True 表示已下载
+        True 表示已下载且完整
     """
     if model_dir is None:
         model_dir = get_model_dir()
@@ -104,8 +110,13 @@ def is_model_downloaded(model_size: str, model_dir: str = None) -> bool:
     snapshots = Path(model_dir) / repo_name / "snapshots"
     if not snapshots.is_dir():
         return False
+    # 2026-06-06 改进：必须满足 _verify_model_files 才算下载完成
+    required_files = ["config.json", "model.bin", "tokenizer.json"]
     for commit_dir in snapshots.iterdir():
-        if commit_dir.is_dir() and any(commit_dir.iterdir()):
+        if not commit_dir.is_dir():
+            continue
+        if all((commit_dir / f).exists() and (commit_dir / f).stat().st_size > 0
+               for f in required_files):
             return True
     return False
 
@@ -133,17 +144,15 @@ class WhisperService:
         self.model: Optional[WhisperModel] = None
     
     def _is_model_cached(self) -> bool:
-        """检查模型文件是否已完整下载到本地缓存"""
-        model_dir = Path(self.model_dir)
-        repo_name = f"models--Systran--faster-whisper-{self.config.model_size}"
-        snapshots = model_dir / repo_name / "snapshots"
-        if not snapshots.is_dir():
-            return False
-        # snapshots 下至少有一个 commit 目录，且该目录非空
-        for commit_dir in snapshots.iterdir():
-            if commit_dir.is_dir() and any(commit_dir.iterdir()):
-                return True
-        return False
+        """
+        检查模型文件是否已完整下载到本地缓存。
+
+        2026-06-06 改进：之前只检查 snapshots 目录下是否有非空 commit 目录,
+        但半下载状态（.incomplete 文件 / 部分下载）也会创建非空目录，
+        导致假阳性返回 True，WhisperModel 加载时尝试加载半下载文件 → 卡住。
+        现在直接复用 _verify_model_files() 的逻辑：必须所有关键文件存在且 size > 0。
+        """
+        return self._verify_model_files()
 
     def _verify_model_files(self) -> bool:
         """验证模型关键文件是否完整（检测半下载状态）"""
@@ -235,6 +244,7 @@ class WhisperService:
 
             # 启动后台线程轮询下载目录大小，定时上报进度
             stop_event = threading.Event()
+            cancel_event = threading.Event()  # 2026-06-06 新增: 取消信号
             model_dir = Path(self.model_dir)
 
             def _poll_download():
@@ -242,14 +252,16 @@ class WhisperService:
                 # 留 50% 给实际字幕提取（worker 那边会 50+int(...) 算）
                 while not stop_event.is_set():
                     try:
-                        current_bytes = sum(
-                            f.stat().st_size
-                            for f in model_dir.rglob('*')
-                            if f.is_file()
-                        )
-                        if model_total_bytes > 0 and current_bytes > 0:
+                        # 2026-06-06: 在 poll 回调里也调 progress_callback,
+                        # 让 worker 的取消检测(在 progress_callback 里)能触发
+                        # → raise InterruptedError → 中断 download
+                        if model_total_bytes > 0:
+                            current_bytes = sum(
+                                f.stat().st_size
+                                for f in model_dir.rglob('*')
+                                if f.is_file()
+                            )
                             raw_pct = (current_bytes / model_total_bytes) * 100
-                            # clamp 到 [5, 99]，避免 0% 或 ≥100% 误导
                             pct = max(5, min(99, int(raw_pct + 0.5)))
                             progress_callback(
                                 pct, 100,
@@ -258,16 +270,28 @@ class WhisperService:
                                 f"{format_file_size(model_total_bytes)} "
                                 f"({pct}%)"
                             )
-                        elif current_bytes > 0:
-                            # 兜底：未知总大小时仍显示已下载
-                            progress_callback(
-                                5, 100,
-                                f"正在下载模型 {self.config.model_size}... "
-                                f"已下载 {format_file_size(current_bytes)}"
+                        else:
+                            current_bytes = sum(
+                                f.stat().st_size
+                                for f in model_dir.rglob('*')
+                                if f.is_file()
                             )
+                            if current_bytes > 0:
+                                progress_callback(
+                                    5, 100,
+                                    f"正在下载模型 {self.config.model_size}... "
+                                    f"已下载 {format_file_size(current_bytes)}"
+                                )
                     except Exception:
-                        pass
-                    stop_event.wait(3)
+                        # progress_callback 内部可能 raise InterruptedError
+                        # (worker 检测到取消),这里捕获后设置 cancel_event
+                        # 让外层 WhisperModel 调用也能退出
+                        cancel_event.set()
+                        stop_event.set()
+                        return
+                    # 用更短的 wait (1s) 让取消信号更快被检测到
+                    if stop_event.wait(1):
+                        break
 
             poll_thread = threading.Thread(target=_poll_download, daemon=True)
             poll_thread.start()

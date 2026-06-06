@@ -108,6 +108,16 @@ class TaskWorker:
         """
         获取（或复用）Whisper 服务实例。
         仅在模型/设备/精度配置变更时才重新加载模型。
+
+        2026-06-06 改进：在重建 service 前先强制验证缓存完整性。
+        之前用户报告"取消下载后重试新任务卡在准备中" —— 根因是：
+        1. 用户取消时 WhisperModel 内部 hf_hub 还在下载
+        2. 取消信号被吞,hf_hub 完成后 WhisperModel 加载半下载文件失败抛异常
+        3. 异常被 worker 外层 except 接住,任务标 FAILED
+        4. 但半下载文件残留在磁盘上,_is_model_cached 假阳性
+        5. 新任务进来 → 复用旧 service(model 已损坏)/或重新加载半下载文件 → 死循环
+        修复:重建 service 前先验证缓存完整性,失败就清理半下载文件,
+        强制 hf_hub 重新下载(完整且可中断的下载流程)。
         """
         config_key = (
             f"{config.whisper.model_size}|"
@@ -116,7 +126,14 @@ class TaskWorker:
         )
         if self._whisper_service is None or self._whisper_config_key != config_key:
             if self._whisper_service is not None:
+                # 2026-06-06: 卸载旧 service 前先验证缓存完整性
+                # 如果半下载,把残留文件清掉,避免下次加载卡死
                 self._whisper_service.unload_model()
+                if not self._whisper_service._verify_model_files():
+                    print(
+                        f"[TaskWorker] 检测到半下载的 {config.whisper.model_size} 模型,清理中..."
+                    )
+                    self._cleanup_partial_model(config.whisper.model_size)
             vad_params = config.get_vad_parameters()
             self._whisper_service = WhisperService(config.whisper, vad_params)
             self._whisper_config_key = config_key
@@ -125,6 +142,35 @@ class TaskWorker:
             self._whisper_service.vad_params = config.get_vad_parameters()
 
         return self._whisper_service
+
+    def _cleanup_partial_model(self, model_size: str):
+        """
+        清理半下载的模型文件。
+
+        HF 缓存目录结构:
+        {model_dir}/models--Systran--faster-whisper-{size}/
+          blobs/         # 实际文件(可能是 .incomplete)
+          snapshots/     # 软链接/指针
+          refs/          # 引用信息
+
+        半下载特征:
+        - blobs/ 下有 .incomplete 文件
+        - snapshots/ 下某个 commit 目录存在但缺关键文件
+        - refs/main 指向不存在的 commit
+
+        清理策略:直接删除整个 models--Systran--faster-whisper-{size} 目录,
+        下次加载会重新下载(完整流程,可中断)。
+        """
+        from services.whisper_service import get_model_dir
+        import shutil
+        model_dir = Path(get_model_dir())
+        repo_dir = model_dir / f"models--Systran--faster-whisper-{model_size}"
+        if repo_dir.exists():
+            try:
+                shutil.rmtree(repo_dir)
+                print(f"[TaskWorker] 已清理半下载模型: {repo_dir}")
+            except Exception as e:
+                print(f"[TaskWorker] 清理半下载模型失败: {e}")
 
     def _check_translation_config(self, config: AppConfig) -> tuple[bool, str]:
         """
