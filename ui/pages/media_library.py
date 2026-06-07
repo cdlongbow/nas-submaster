@@ -30,157 +30,196 @@ TARGET_LANG_CODES = {'zh', 'chs', 'cht', 'en', 'eng'}
 def render_media_library_page(debug_mode: bool = False):
     """渲染媒体库页面"""
 
+    # v1.8.5 sticky header：把"全选以上"所有内容（顶部工具栏 + 统计栏 + 全选行）
+    # 固定在屏幕顶端，只让列表上下滑动。
+    #
+    # 实施方案：用 streamlit 1.58 官方 st.container(key="X") API —— 内部输出
+    # class="st-key-X" 到 DOM（源码 index.dkY5s53S.js iV 函数）。CSS 选中
+    # .st-key-nsm-sticky-* 设 position: sticky。
+    #
+    # 这是 streamlit-extras 1.6.0 stylable_container 用的同样机制（虽
+    # stylable_container 已 deprecated，但底层 API 仍稳定）。
+    #
+    # 三段 top 偏移：工具栏 0 / 统计 76 / 全选 116（视实际高度需微调）。
+    st.markdown("""
+    <style>
+    /* v1.8.5: 媒体库页面 sticky header — 三段固定在顶端 */
+    .st-key-nsm-sticky-toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 1003;
+        background-color: var(--background-color);
+    }
+    .st-key-nsm-sticky-stats {
+        position: sticky;
+        top: 76px;
+        z-index: 1002;
+        background-color: var(--background-color);
+    }
+    .st-key-nsm-sticky-select {
+        position: sticky;
+        top: 116px;
+        z-index: 1001;
+        background-color: var(--background-color);
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     # 计算当前已选中文件数（在列定义之前，供批量删除/开始按钮使用）
     selected_count = get_selected_count()
 
     # 顶部工具栏
     # 比例: 筛选(2.2) | 空白(0.8) | 目录选择(3) | 扫描(0.8) | 删除(0.8) | 开始(0.8)
-    col_filter, col_spacer, col_dir, col_scan, col_del, col_start = st.columns(
+    # v1.8.5: 用 st.container(key="nsm-sticky-toolbar") 包整段让它 sticky
+    with st.container(key="nsm-sticky-toolbar"):
+        col_filter, col_spacer, col_dir, col_scan, col_del, col_start = st.columns(
         [2.2, 0.8, 3, 0.8, 0.8, 0.8], vertical_alignment="bottom"
     )
 
-    # ========== 列 1: 筛选器 ==========
-    with col_filter:
-        filter_options = ["全部", "待处理(有字幕)", "待处理(无字幕)", "已有目标字幕"]
-        filter_type = st.selectbox(
-            "筛选",
-            filter_options,
-            label_visibility="collapsed"
-        )
+        # ========== 列 1: 筛选器 ==========
+        with col_filter:
+            filter_options = ["全部", "待处理(有字幕)", "待处理(无字幕)", "已有目标字幕"]
+            filter_type = st.selectbox(
+                "筛选",
+                filter_options,
+                label_visibility="collapsed"
+            )
 
-    # ========== 列 2: 空白 ==========
-    with col_spacer:
-        st.empty()
+        # ========== 列 2: 空白 ==========
+        with col_spacer:
+            st.empty()
 
-    # ========== 列 3: 目录选择器 ==========
-    with col_dir:
-        if 'subdirs' not in st.session_state or st.session_state.get('refresh_subdirs'):
-            with st.spinner("扫描目录结构..."):
-                st.session_state.subdirs = discover_media_subdirectories(max_depth=3)
-                st.session_state.refresh_subdirs = False
+        # ========== 列 3: 目录选择器 ==========
+        with col_dir:
+            if 'subdirs' not in st.session_state or st.session_state.get('refresh_subdirs'):
+                with st.spinner("扫描目录结构..."):
+                    st.session_state.subdirs = discover_media_subdirectories(max_depth=3)
+                    st.session_state.refresh_subdirs = False
 
-        subdirs = st.session_state.subdirs
+            subdirs = st.session_state.subdirs
 
-        selected_dirs = st.multiselect(
-            "选择目录",
-            subdirs,
-            placeholder="选择一个或多个目录 (留空显示全部)",
-            label_visibility="collapsed"
-        )
+            selected_dirs = st.multiselect(
+                "选择目录",
+                subdirs,
+                placeholder="选择一个或多个目录 (留空显示全部)",
+                label_visibility="collapsed"
+            )
 
-    # ========== 列 4: 扫描按钮 ==========
-    with col_scan:
-        refresh_text = "扫描全部" if not selected_dirs else f"扫描 ({len(selected_dirs)})"
-        if st.button(refresh_text, use_container_width=True):
-            _perform_scan(selected_dirs, debug_mode)
+        # ========== 列 4: 扫描按钮 ==========
+        with col_scan:
+            refresh_text = "扫描全部" if not selected_dirs else f"扫描 ({len(selected_dirs)})"
+            if st.button(refresh_text, use_container_width=True):
+                _perform_scan(selected_dirs, debug_mode)
 
-    # ========== 列 5: 批量删除按钮 ==========
-    with col_del:
-        if st.button(
-            "批量删除",
-            use_container_width=True,
-            disabled=(selected_count == 0),
-            help="从媒体库中删除选中的文件记录（不删除磁盘文件）"
-        ):
-            _delete_selected_files()
+        # ========== 列 5: 批量删除按钮 ==========
+        with col_del:
+            if st.button(
+                "批量删除",
+                use_container_width=True,
+                disabled=(selected_count == 0),
+                help="从媒体库中删除选中的文件记录（不删除磁盘文件）"
+            ):
+                _delete_selected_files()
 
-    # 筛选逻辑：全部/有字幕/无字幕/已有目标字幕
-    filter_map = {
-        "全部": None,
-        "待处理(有字幕)": "has_subtitle",
-        "待处理(无字幕)": "no_subtitle",
-        "已有目标字幕": "has_target_subtitle"
-    }
-    subtitle_filter = filter_map.get(filter_type)
+        # 筛选逻辑：全部/有字幕/无字幕/已有目标字幕
+        filter_map = {
+            "全部": None,
+            "待处理(有字幕)": "has_subtitle",
+            "待处理(无字幕)": "no_subtitle",
+            "已有目标字幕": "has_target_subtitle"
+        }
+        subtitle_filter = filter_map.get(filter_type)
 
-    # 筛选条件或目录变化时重置到第 1 页
-    filter_key = f"{filter_type}|{','.join(selected_dirs)}"
-    if st.session_state.get('_last_filter_key') != filter_key:
-        st.session_state['_media_page'] = 0
-        st.session_state['_last_filter_key'] = filter_key
+        # 筛选条件或目录变化时重置到第 1 页
+        filter_key = f"{filter_type}|{','.join(selected_dirs)}"
+        if st.session_state.get('_last_filter_key') != filter_key:
+            st.session_state['_media_page'] = 0
+            st.session_state['_last_filter_key'] = filter_key
 
-    current_page = st.session_state.get('_media_page', 0)
-    page_size = st.session_state.get('_media_page_size', DEFAULT_PAGE_SIZE)
+        current_page = st.session_state.get('_media_page', 0)
+        page_size = st.session_state.get('_media_page_size', DEFAULT_PAGE_SIZE)
 
-    # ========== 加载文件 ==========
-    # 有目录过滤或细分筛选时需要 Python 端过滤
-    try:
-        # 根据筛选条件加载文件
-        if subtitle_filter in ["has_subtitle", "no_subtitle", "has_target_subtitle"]:
-            # 细分筛选：先加载全量，再用 Python 过滤
-            all_files = MediaDAO.get_media_files_filtered(None)  # 加载全部
-            filtered_files = _filter_files_by_subtitle_status(all_files, subtitle_filter)
-        elif selected_dirs:
-            # 目录筛选：加载有字幕或无字幕
-            has_subtitle = None  # 暂不支持细粒度目录筛选
-            all_files = MediaDAO.get_media_files_filtered(has_subtitle)
-            filtered_files = []
-            for f in all_files:
-                fpath = Path(f.file_path)
-                for d in selected_dirs:
-                    dir_path = Path(MEDIA_ROOT) / d
-                    try:
-                        fpath.relative_to(dir_path)
-                        filtered_files.append(f)
-                        break
-                    except ValueError:
-                        continue
-
-            total_count = len(filtered_files)
-            start = current_page * page_size
-            page_files = filtered_files[start:start + page_size]
-        else:
-            # 全部文件
-            filtered_files = MediaDAO.get_media_files_filtered(None)
-            total_count = len(filtered_files)
-            start = current_page * page_size
-            page_files = filtered_files[start:start + page_size]
-
-        # 应用目录筛选后计数
-        if subtitle_filter in ["has_subtitle", "no_subtitle", "has_target_subtitle"]:
-            if selected_dirs:
-                # 进一步按目录过滤
-                final_files = []
-                for f in filtered_files:
+        # ========== 加载文件 ==========
+        # 有目录过滤或细分筛选时需要 Python 端过滤
+        try:
+            # 根据筛选条件加载文件
+            if subtitle_filter in ["has_subtitle", "no_subtitle", "has_target_subtitle"]:
+                # 细分筛选：先加载全量，再用 Python 过滤
+                all_files = MediaDAO.get_media_files_filtered(None)  # 加载全部
+                filtered_files = _filter_files_by_subtitle_status(all_files, subtitle_filter)
+            elif selected_dirs:
+                # 目录筛选：加载有字幕或无字幕
+                has_subtitle = None  # 暂不支持细粒度目录筛选
+                all_files = MediaDAO.get_media_files_filtered(has_subtitle)
+                filtered_files = []
+                for f in all_files:
                     fpath = Path(f.file_path)
                     for d in selected_dirs:
                         dir_path = Path(MEDIA_ROOT) / d
                         try:
                             fpath.relative_to(dir_path)
-                            final_files.append(f)
+                            filtered_files.append(f)
                             break
                         except ValueError:
                             continue
-                filtered_files = final_files
 
-            total_count = len(filtered_files)
-            start = current_page * page_size
-            page_files = filtered_files[start:start + page_size]
-    except Exception as e:
-        st.error(f"加载媒体库失败: {e}")
-        return
+                total_count = len(filtered_files)
+                start = current_page * page_size
+                page_files = filtered_files[start:start + page_size]
+            else:
+                # 全部文件
+                filtered_files = MediaDAO.get_media_files_filtered(None)
+                total_count = len(filtered_files)
+                start = current_page * page_size
+                page_files = filtered_files[start:start + page_size]
 
-    # 维护 id→file_path 缓存，供跨页"开始处理"使用
-    if '_id_to_path' not in st.session_state:
-        st.session_state['_id_to_path'] = {}
-    for f in page_files:
-        st.session_state['_id_to_path'][f.id] = f.file_path
+            # 应用目录筛选后计数
+            if subtitle_filter in ["has_subtitle", "no_subtitle", "has_target_subtitle"]:
+                if selected_dirs:
+                    # 进一步按目录过滤
+                    final_files = []
+                    for f in filtered_files:
+                        fpath = Path(f.file_path)
+                        for d in selected_dirs:
+                            dir_path = Path(MEDIA_ROOT) / d
+                            try:
+                                fpath.relative_to(dir_path)
+                                final_files.append(f)
+                                break
+                            except ValueError:
+                                continue
+                    filtered_files = final_files
 
-    # ========== 列 5: 开始按钮 ==========
-    with col_start:
-        btn_text = f"处理 ({selected_count})" if selected_count > 0 else "开始处理"
-        if st.button(
-            btn_text,
-            type="primary",
-            use_container_width=True,
-            disabled=(selected_count == 0)
-        ):
-            _add_tasks_for_selected_files()
+                total_count = len(filtered_files)
+                start = current_page * page_size
+                page_files = filtered_files[start:start + page_size]
+        except Exception as e:
+            st.error(f"加载媒体库失败: {e}")
+            return
+
+        # 维护 id→file_path 缓存，供跨页"开始处理"使用
+        if '_id_to_path' not in st.session_state:
+            st.session_state['_id_to_path'] = {}
+        for f in page_files:
+            st.session_state['_id_to_path'][f.id] = f.file_path
+
+        # ========== 列 5: 开始按钮 ==========
+        with col_start:
+            btn_text = f"处理 ({selected_count})" if selected_count > 0 else "开始处理"
+            if st.button(
+                btn_text,
+                type="primary",
+                use_container_width=True,
+                disabled=(selected_count == 0)
+            ):
+                _add_tasks_for_selected_files()
 
     # ========== 统计信息 ==========
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-    _render_statistics(total_count, selected_count, selected_dirs, filter_type)
-    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    # v1.8.5: 用 st.container(key="nsm-sticky-stats") 包整段让它 sticky
+    with st.container(key="nsm-sticky-stats"):
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        _render_statistics(total_count, selected_count, selected_dirs, filter_type)
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
     # ========== 空状态 ==========
     if total_count == 0:
@@ -188,8 +227,10 @@ def render_media_library_page(debug_mode: bool = False):
         return
 
     # ========== 全选（作用于当前页）==========
-    current_select_all = st.checkbox("全选（当前页）", key="select_all_box")
-    last_select_all = st.session_state.get("_last_select_all", False)
+    # v1.8.5: 用 st.container(key="nsm-sticky-select") 包整段让它 sticky
+    with st.container(key="nsm-sticky-select"):
+        current_select_all = st.checkbox("全选（当前页）", key="select_all_box")
+        last_select_all = st.session_state.get("_last_select_all", False)
 
     if current_select_all != last_select_all:
         for f in page_files:

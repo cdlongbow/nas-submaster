@@ -271,3 +271,98 @@ class TestRenderMediaLibraryPageSmoke:
             assert call_line < col_def_line, (
                 f"get_selected_count() (line {call_line}) 必须在 st.columns() (line {col_def_line}) 之前"
             )
+
+
+# ============================================================================
+# v1.8.5 sticky header 注入测试
+# ============================================================================
+#
+# 需求：把"全选以上"的所有内容（顶部工具栏 + 统计信息 + 全选 checkbox）
+# 固定在屏幕顶端，只让列表上下滑动。
+#
+# 实施方案（v1.8.5 - 重做）：
+# streamlit 1.58 官方 API: st.container(key="X") 会输出 class="st-key-X" 到 DOM。
+# 内部源码 index.dkY5s53S.js 有 iV(e) 函数: `st-key-` + e.trim()...
+# 这是 streamlit-extras stylable_container 1.6.0 用的同样机制（虽 stylable_container 已
+# deprecated，但机制仍在）。
+#
+# 我们用 st.container(key="nsm-sticky-toolbar") 包 3 段，CSS 选中 .st-key-nsm-sticky-*
+# 设 position: sticky。
+#
+# v1.8.5 (旧方案，已回滚) 依赖 :has() + 兄弟选择器匹配 streamlit 渲染 DOM —— 不可靠。
+# v1.8.5 (新方案) 用 streamlit 官方 key API 输出的 class —— 稳定。
+
+class TestStickyHeaderInjection:
+    """v1.8.5: 验证 render_media_library_page 用 st.container(key=...) 包 3 段"""
+
+    @staticmethod
+    def _run_with_container_mock():
+        """运行 render_media_library_page，patch st.container 收集所有调用"""
+        from unittest.mock import patch, MagicMock
+
+        # st.container() 返回 DeltaGenerator, with context 也要能 work
+        # 简化为只记录 key 参数
+        container_calls = []
+        real_container = __import__("streamlit").container
+
+        def fake_container(*args, **kwargs):
+            container_calls.append(kwargs)
+            return real_container(*args, **kwargs)
+
+        mock_file = MagicMock()
+        mock_file.id = 1
+        mock_file.file_path = "/media/test.mkv"
+        mock_file.file_name = "test.mkv"
+        mock_file.file_size = 1024
+        mock_file.subtitles = []
+
+        with patch("streamlit.container", side_effect=fake_container), \
+             patch("database.media_dao.MediaDAO.get_media_files_filtered", return_value=[mock_file]), \
+             patch("database.media_dao.MediaDAO.delete_media_file", return_value=True), \
+             patch("database.media_dao.MediaDAO.get_media_paths_by_prefix", return_value=[]), \
+             patch("database.task_dao.TaskDAO.get_pending_task", return_value=None), \
+             patch("services.media_scanner.discover_media_subdirectories", return_value=[]), \
+             patch("services.media_scanner.scan_media_directory", return_value=(0, [])), \
+             patch("services.media_scanner.rescan_video_subtitles", return_value=None):
+            from ui.pages.media_library import render_media_library_page
+            render_media_library_page(debug_mode=False)
+
+        return container_calls
+
+    def test_three_sticky_containers_created(self):
+        """必须创建 3 个 st.container 调用，key 分别是 toolbar / stats / select"""
+        calls = self._run_with_container_mock()
+        keys = [c.get("key") for c in calls]
+
+        for expected in ["nsm-sticky-toolbar", "nsm-sticky-stats", "nsm-sticky-select"]:
+            assert expected in keys, (
+                f"必须用 st.container(key={expected!r})，"
+                f"实际 keys: {keys}"
+            )
+
+    def test_sticky_keys_use_nsm_prefix(self):
+        """3 个 key 必须用 nsm- 前缀避免冲突"""
+        calls = self._run_with_container_mock()
+        keys = [c.get("key") for c in calls if c.get("key")]
+        sticky_keys = [k for k in keys if "sticky" in str(k)]
+        assert len(sticky_keys) >= 3, (
+            f"应有至少 3 个 sticky key，实际: {sticky_keys}"
+        )
+        for k in sticky_keys:
+            assert k.startswith("nsm-"), (
+                f"sticky key 必须 nsm- 前缀避免冲突，实际: {k}"
+            )
+
+    def test_sticky_keys_in_order_toolbar_stats_select(self):
+        """3 个 sticky key 调用顺序必须是 toolbar → stats → select（从顶到底）"""
+        calls = self._run_with_container_mock()
+        keys = [c.get("key") for c in calls if c.get("key") and "sticky" in str(c.get("key"))]
+
+        assert keys[:3] == [
+            "nsm-sticky-toolbar",
+            "nsm-sticky-stats",
+            "nsm-sticky-select",
+        ], (
+            f"sticky key 顺序必须是 toolbar → stats → select，"
+            f"实际: {keys[:3]}"
+        )
