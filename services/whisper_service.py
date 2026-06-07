@@ -196,6 +196,10 @@ class WhisperService:
         self.vad_params = vad_params
         self.model_dir = model_dir
         self.model: Optional[WhisperModel] = None
+        # v1.8.3: 缓存最近一次 transcribe 检测到的语言和置信度
+        # 给 worker 决策"是否跳过 LLM 翻译"用 (见 should_skip_translation)
+        self._last_detected_lang: Optional[str] = None
+        self._last_detected_prob: float = 0.0
     
     def _is_model_cached(self) -> bool:
         """
@@ -408,31 +412,37 @@ class WhisperService:
         self,
         video_path: str,
         output_path: Optional[str] = None,
-        progress_callback: Optional[Callable[[int, int, str], None]] = None
-    ) -> str:
+        progress_callback: Optional[Callable[[str, float, str], None]] = None
+    ) -> tuple[str, Optional[str], float]:
         """
         从视频中提取字幕
-        
+
+        v1.8.3: 返回元组 (srt_path, detected_lang, detected_prob)
+        - detected_lang: Whisper 检测到的源语言 (ISO 639-1, e.g. 'zh'/'en')
+        - detected_prob: 检测置信度 0.0-1.0
+        - 这两个字段给 worker._process_task 用来决定是否跳过 LLM 翻译
+          (见 core/worker.py:should_skip_translation)
+
         Args:
             video_path: 视频文件路径
             output_path: 输出 SRT 文件路径（默认：同名 .srt）
-            progress_callback: 进度回调函数 (current, total, message)
-        
+            progress_callback: v1.8.1 新协议 (stage, stage_progress, message)
+
         Returns:
-            生成的 SRT 文件路径
+            (srt_path, detected_lang, detected_prob) 元组
         """
         # 确保模型已加载（传入回调以支持下载进度上报）
         if self.model is None:
             self.load_model(progress_callback)
-        
+
         # 确定输出路径
         if output_path is None:
             output_path = str(Path(video_path).with_suffix('.srt'))
-        
+
         # 更新进度（v1.8.1: 新协议 stage='extract'，stage_progress 独立 0-100%）
         if progress_callback:
             progress_callback("extract", 0.0, f"开始提取字幕...")
-        
+
         # 准备转录参数
         transcribe_params = {
             'audio': video_path,
@@ -443,11 +453,11 @@ class WhisperService:
             'condition_on_previous_text': True,
             'temperature': [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
         }
-        
+
         # 如果不是自动检测，指定语言
         if self.config.source_language != 'auto':
             transcribe_params['language'] = self.config.source_language
-        
+
         try:
             # 执行转录
             segments, info = self.model.transcribe(**transcribe_params)
@@ -482,9 +492,14 @@ class WhisperService:
             # 完成
             if progress_callback:
                 progress_callback("extract", 100.0, f"字幕提取完成 ({idx} 行)")
-            
-            return output_path
-        
+
+            # v1.8.3: 把检测到的语言和置信度缓存到实例属性
+            # 给 worker._extract_subtitle 决策"是否跳过 LLM 翻译"用
+            # 也保留在返回值里以兼容未来的"一次性获取"调用方
+            self._last_detected_lang = info.language
+            self._last_detected_prob = info.language_probability
+            return output_path, info.language, info.language_probability
+
         except Exception as e:
             print(f"[WhisperService] Extraction failed: {e}")
             raise
@@ -506,20 +521,23 @@ def extract_subtitle_from_video(
     config: WhisperConfig,
     vad_params: VADParameters,
     output_path: Optional[str] = None,
-    progress_callback: Optional[Callable[[int, int, str], None]] = None
-) -> str:
+    progress_callback: Optional[Callable[[str, float, str], None]] = None
+) -> tuple[str, Optional[str], float]:
     """
     从视频提取字幕（快捷函数）
-    
+
+    v1.8.3: 返回元组 (srt_path, detected_lang, detected_prob)
+    见 WhisperService.extract_subtitle 文档
+
     Args:
         video_path: 视频文件路径
         config: Whisper 配置
         vad_params: VAD 参数
         output_path: 输出路径（可选）
-        progress_callback: 进度回调
-    
+        progress_callback: 进度回调 (v1.8.1 新协议)
+
     Returns:
-        SRT 文件路径
+        (srt_path, detected_lang, detected_prob) 元组
     """
     service = WhisperService(config, vad_params)
     return service.extract_subtitle(video_path, output_path, progress_callback)

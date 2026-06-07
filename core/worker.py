@@ -13,6 +13,80 @@ from typing import Optional, Callable
 
 from core.models import TaskStatus
 from core.config import AppConfig, ConfigManager
+
+
+# ============================================================================
+# 翻译跳过决策 (v1.8.3)
+# ============================================================================
+#
+# 当 Whisper 检测到的字幕语言 == 用户配置的目标语言时，跳过 LLM 翻译，
+# 节省 API 成本 + 等待时间。参考 faster-whisper 官方 threshold 设计：
+#   - faster_whisper/transcribe.py:1768-1841 (默认 0.5)
+#   - faster_whisper/tests/test_transcribe.py:48,67 (官方测试用 0.7)
+#
+# 选 0.5 是因为：
+# 1. 跟 faster-whisper 官方默认对齐
+# 2. 主流语言（zh/en/ja/ko 等）在 medium 模型下 >0.5 是非常稳的判断
+# 3. 选 0.7 太保守，会导致"明明是中文但被判 0.65 置信度就硬翻译"浪费钱
+
+SKIP_TRANSLATION_CONFIDENCE = 0.5
+
+
+def should_skip_translation(
+    detected_lang: Optional[str],
+    detected_prob: float,
+    source_language: str,
+    target_language: str,
+) -> tuple[bool, str]:
+    """
+    v1.8.3: 决定是否跳过 LLM 翻译
+
+    当检测到的源语言 == 目标语言 且 置信度足够高 时，跳过 LLM 翻译。
+
+    Args:
+        detected_lang: Whisper/内置字幕检测到的语言 (ISO 639-1, e.g. 'zh'/'en')
+                       None 或空字符串表示没检测到
+        detected_prob: 检测置信度 0.0-1.0
+        source_language: 用户配置的源语言 (config.whisper.source_language)
+                        'auto' 表示让 Whisper 自动检测
+        target_language: 用户配置的目标语言 (config.translation.target_language)
+
+    Returns:
+        (skip, reason)：
+        - skip=True 表示跳过 LLM 翻译
+        - reason 是给用户 log 看的可读字符串
+
+    边界处理：
+    - detected_lang 为空/None → 不跳（避免空判断）
+    - 大小写不敏感 ('ZH' == 'zh')
+    - 置信度用 > 严格大于（跟 faster-whisper 官方一致）
+    - source='auto' 不影响判断（依赖 detected_lang 自身）
+    """
+    # 边界 1: 没检测到语言 → 不跳（不能猜）
+    if not detected_lang:
+        return False, "未检测到源语言，执行翻译"
+
+    # 边界 2: 大小写统一
+    detected = detected_lang.lower()
+    target = target_language.lower()
+
+    # 边界 3: 语言不相等 → 必须翻译
+    if detected != target:
+        return False, f"检测到 {detected}，目标 {target}，执行翻译"
+
+    # 边界 4: 置信度门槛（严格 > ，跟 faster-whisper 官方一致）
+    if detected_prob <= SKIP_TRANSLATION_CONFIDENCE:
+        return False, (
+            f"源语言疑似 {detected} 但置信度低 "
+            f"({detected_prob:.0%})，仍执行翻译"
+        )
+
+    # 全部满足 → 跳过
+    return True, (
+        f"字幕已是目标语言 {target}（置信度 {detected_prob:.0%}），跳过翻译"
+    )
+
+
 from database.connection import wait_for_database, get_db_connection
 from database.task_dao import TaskDAO
 from services.media_scanner import rescan_video_subtitles, scan_media_directory
@@ -248,10 +322,32 @@ class TaskWorker:
                     return
 
             # 步骤 2: 翻译字幕（如果启用）
+            #
+            # v1.8.3: 在调 LLM 之前先看是否需要跳过
+            # - detected_lang 来自 _extract_or_detect_subtitle 写入 self._last_detected_lang
+            #   (Whisper 检测 或 内置字幕 ffprobe tags.language)
+            # - 如果字幕已是目标语言且置信度足够，跳过 LLM 翻译，省钱省时间
             if config.translation.enabled:
-                success = self._translate_subtitle(task_id, srt_path, config)
-                if not success:
-                    return  # 翻译失败或已取消
+                skip, reason = should_skip_translation(
+                    detected_lang=self._last_detected_lang,
+                    detected_prob=self._last_detected_prob,
+                    source_language=config.whisper.source_language,
+                    target_language=config.translation.target_language,
+                )
+                if skip:
+                    # 跳过 LLM，但 UI 步骤条仍显示 translate 阶段"完成"
+                    TaskDAO.update_task(
+                        task_id,
+                        log=reason,
+                        stage="translate",
+                        stage_progress=100.0,
+                        append_log=True,
+                    )
+                else:
+                    # 走原翻译流程
+                    success = self._translate_subtitle(task_id, srt_path, config)
+                    if not success:
+                        return  # 翻译失败或已取消
 
             if self._check_cancelled(task_id):
                 TaskDAO.update_task(task_id, status=TaskStatus.CANCELLED, log="已取消", append_log=True)
@@ -305,21 +401,37 @@ class TaskWorker:
         2. 如果开启"优先使用内置字幕"，检测并尝试提取内置字幕
         3. 以上都失败则回退到 Whisper 识别
 
+        v1.8.3: 把检测到的语言写到 self._last_detected_lang / self._last_detected_prob
+        （供 _process_task 决策是否跳过翻译）。如果走内置字幕路径，
+        用 SubtitleExtractor 检测的语言。
+
         Returns:
             SRT 文件路径，失败则返回 None
         """
+        # 重置上次检测结果（避免上一次任务的语言污染）
+        self._last_detected_lang: Optional[str] = None
+        self._last_detected_prob: float = 0.0
+
         srt_path = Path(file_path).with_suffix('.srt')
 
         # 如果字幕已存在，跳过提取
         if srt_path.exists():
             TaskDAO.update_task(task_id, progress=50, log="字幕已存在", append_log=True)
+            # 已存在的字幕：语言未知（用户原本就有），不跳翻译
             return str(srt_path)
 
         # 如果开启"优先使用内置字幕"，尝试检测
         if config.translation.use_embedded_subtitle:
-            embedded_srt = self._try_extract_embedded_subtitle(task_id, file_path, config)
-            if embedded_srt:
-                return embedded_srt
+            embedded_result = self._try_extract_embedded_subtitle(
+                task_id, file_path, config
+            )
+            if embedded_result:
+                srt, lang = embedded_result
+                # 内置字幕语言已知（来自 ffprobe tags.language）
+                if lang and lang != 'unknown':
+                    self._last_detected_lang = lang
+                    self._last_detected_prob = 1.0  # 内置字幕是用户确认的，置信度 100%
+                return srt
 
         # 回退到 Whisper 识别
         return self._extract_subtitle(task_id, file_path, config)
@@ -329,12 +441,15 @@ class TaskWorker:
         task_id: int,
         file_path: str,
         config: AppConfig
-    ) -> Optional[str]:
+    ) -> Optional[tuple[str, str]]:
         """
         尝试提取内置字幕
 
+        v1.8.3: 返回 (srt_path, language) 元组而不是单独的 srt_path
+        language 是 ffprobe tags.language 标准化的 ISO 639-1 代码
+
         Returns:
-            提取成功返回 SRT 路径，失败返回 None
+            (srt_path, language) 元组，失败返回 None
         """
         try:
             from services.subtitle_extractor import SubtitleExtractor
@@ -382,7 +497,8 @@ class TaskWorker:
                 # 更新该视频的字幕信息
                 MediaDAO.update_media_subtitles(file_path, [embedded_subtitle], False)
                 TaskDAO.update_task(task_id, progress=50, log="内置字幕提取成功", append_log=True)
-                return srt_path
+                # v1.8.3: 返回 (srt_path, language) 元组
+                return str(srt_path), best_track.language
             else:
                 TaskDAO.update_task(task_id, log="内置字幕提取失败，回退到 Whisper", append_log=True)
                 return None
@@ -441,6 +557,16 @@ class TaskWorker:
                 file_path,
                 str(srt_path),
                 progress_callback
+            )
+
+            # v1.8.3: 读 whisper service 缓存的检测结果（避免再调一次 detect_language）
+            # 详见 WhisperService.extract_subtitle 在末尾把 info.language/probability
+            # 存到 self._last_detected_lang / self._last_detected_prob
+            self._last_detected_lang = getattr(
+                whisper, '_last_detected_lang', None
+            )
+            self._last_detected_prob = getattr(
+                whisper, '_last_detected_prob', 0.0
             )
 
             TaskDAO.update_task(task_id, log="字幕提取完成", append_log=True)
